@@ -51,6 +51,7 @@ let totalVehicles = 0;
 let totalPlates = 0;
 let totalConfidenceSum = 0;
 let activityHistory = new Array(12).fill(0);
+let plateBuffer = [];
 
 // ─── Mouse Tracking ───────────────────────────────────────
 let mouse = { x: null, y: null, radius: 150 };
@@ -355,70 +356,98 @@ function draw(d) {
 function logPlates(d) {
     d.plates.forEach(p => {
         if (p.text === '...' || p.text.length < 4) return;
+        plateBuffer.push({
+            text: p.text.trim(),
+            confidence: p.confidence || 0,
+            type: p.vehicle_type || 'Unknown',
+            status: d.status,
+            timestamp: Date.now()
+        });
+    });
+}
 
-        // remove empty state row
-        const empty = document.getElementById('log-empty-row');
-        if (empty) empty.remove();
+function commitPlateToLog(p) {
+    // remove empty state row
+    const empty = document.getElementById('log-empty-row');
+    if (empty) empty.remove();
 
-        // deduplicate by recent text (last 10 plates)
-        const existing = Array.from(logList.querySelectorAll('.plate-text-cell')).slice(0, 10);
-        for (const el of existing) {
-            const oldText = el.textContent.trim();
-            const newText = p.text.trim();
-            // Treat as duplicate if OCR noise changes 2 or fewer characters
-            if (getEditDist(oldText, newText) <= 2) {
-                // Optionally update the row text to the higher-confidence read
-                if (p.confidence > 0.8) {
-                    el.textContent = newText;
-                }
-                return;
+    totalPlates++;
+    totalVehicles++;
+    totalConfidenceSum += p.confidence;
+    
+    metricScanned.textContent = totalPlates;
+    metricTotal.textContent = totalVehicles;
+    metricRecognized.textContent = totalPlates;
+    if (metricScannedPct) {
+        const avgConf = Math.round((totalConfidenceSum / totalPlates) * 100);
+        metricScannedPct.textContent = `${avgConf}%`;
+    }
+    
+    activityHistory[11]++;
+
+    const now = new Date(p.timestamp);
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    
+    const row = document.createElement('tr');
+    row.className = "hover:bg-slate-800/50 transition-colors text-slate-300";
+    row.innerHTML = `
+        <td class="px-4 py-3 border-none font-mono text-[11px] whitespace-nowrap">
+            ${timeStr}
+        </td>
+        <td class="px-4 py-3 border-none font-medium text-xs">
+            ${p.type}
+        </td>
+        <td class="px-4 py-3 border-none font-bold text-white tracking-wider font-mono text-xs plate-text-cell">
+            ${p.text}
+        </td>
+    `;
+    logList.prepend(row);
+
+    if (logList.children.length > 50) {
+        logList.removeChild(logList.lastChild);
+    }
+}
+
+function processPlateBuffer() {
+    if (plateBuffer.length === 0) return;
+    
+    // Group similar plates to find the most accurate one
+    let groups = [];
+    plateBuffer.forEach(p => {
+        let found = false;
+        for (let g of groups) {
+            if (getEditDist(g[0].text, p.text) <= 2) {
+                g.push(p);
+                found = true;
+                break;
             }
         }
-
-        totalPlates++;
-        totalVehicles++;
-        totalConfidenceSum += (p.confidence || 0);
+        if (!found) groups.push([p]);
+    });
+    
+    // Process each group
+    groups.forEach(g => {
+        // Pick the plate read with the highest OCR confidence in this group
+        g.sort((a, b) => b.confidence - a.confidence);
+        const bestPlate = g[0];
         
-        metricScanned.textContent = totalPlates;
-        metricTotal.textContent = totalVehicles;
-        metricRecognized.textContent = totalPlates;
-        if (metricScannedPct) {
-            const avgConf = Math.round((totalConfidenceSum / totalPlates) * 100);
-            metricScannedPct.textContent = `${avgConf}%`;
+        // Final deduplication against the UI log to prevent duplicate logging
+        const existing = Array.from(logList.querySelectorAll('.plate-text-cell')).slice(0, 10);
+        let isDuplicate = false;
+        for (const el of existing) {
+            if (getEditDist(el.textContent.trim(), bestPlate.text) <= 2) {
+                isDuplicate = true;
+                break;
+            }
         }
         
-        activityHistory[11]++;
-
-        const now = new Date();
-        const dateStr = now.toLocaleDateString('en-GB'); // DD/MM/YYYY
-        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        
-        const isAllowed = d.status === "ALLOWED";
-        const statusClass = isAllowed ? 'text-emerald-400' : 'text-rose-400';
-        const statusText = isAllowed ? 'Access Granted' : 'Access Denied';
-        
-        const confPercent = Math.round((p.confidence || 0) * 100);
-        const vType = p.vehicle_type || 'Unknown';
-
-        const row = document.createElement('tr');
-        row.className = "hover:bg-slate-800/50 transition-colors text-slate-300";
-        row.innerHTML = `
-            <td class="px-4 py-3 border-none font-mono text-[11px] whitespace-nowrap">
-                ${timeStr}
-            </td>
-            <td class="px-4 py-3 border-none font-medium text-xs">
-                ${vType}
-            </td>
-            <td class="px-4 py-3 border-none font-bold text-white tracking-wider font-mono text-xs plate-text-cell">
-                ${p.text}
-            </td>
-        `;
-        logList.prepend(row);
-
-        if (logList.children.length > 50) {
-            logList.removeChild(logList.lastChild);
+        if (!isDuplicate) {
+            commitPlateToLog(bestPlate);
         }
     });
+    
+    // Clear buffer after processing
+    plateBuffer = [];
 }
 
 // ─── Activity Graph Animation ────────────────────────────
@@ -446,3 +475,6 @@ function updateActivityGraph() {
 
 // Update the graph every 5 seconds (60 seconds total for 12 bars)
 setInterval(updateActivityGraph, 5000);
+
+// Process plate buffer for temporal majority voting every 1 second
+setInterval(processPlateBuffer, 1000);

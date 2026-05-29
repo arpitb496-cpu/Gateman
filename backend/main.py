@@ -27,8 +27,8 @@ def clean_and_validate_plate(text, strict=False):
             return bh_match.group(0)
         return None
 
-    # Forgiving logic
-    if len(text) >= 4 and any(c.isdigit() for c in text):
+    # Forgiving logic (strengthened against noise)
+    if 6 <= len(text) <= 11 and sum(c.isdigit() for c in text) >= 2:
         return text
         
     return None
@@ -94,8 +94,13 @@ class DetectionResult(BaseModel):
     status: str = "" # "ALLOWED", "UNKNOWN", or ""
 
 def preprocess_for_ocr(plate_crop):
-    """Optimizes image preprocessing scale for EasyOCR to increase CPU speeds by 3-5x."""
+    """Optimizes image preprocessing scale for EasyOCR and applies CLAHE."""
     gray = cv2.cvtColor(plate_crop, cv2.COLOR_BGR2GRAY)
+    
+    # Apply Contrast Limited Adaptive Histogram Equalization (CLAHE)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    gray = clahe.apply(gray)
+    
     h, w = gray.shape[:2]
     # If crop is tiny, upscale it to target size for clear reading. 
     # If crop is already large (e.g. phone screen), do NOT upscale to save CPU cycles!
