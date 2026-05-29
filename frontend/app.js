@@ -26,6 +26,24 @@ const metricRecognized = document.getElementById('metric-recognized');
 const metricRealtime = document.getElementById('metric-realtime');
 const metricScannedPct = document.getElementById('metric-scanned-percent');
 
+const getEditDist = (a, b) => {
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+    const matrix = [];
+    for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+    for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+    for (let i = 1; i <= b.length; i++) {
+        for (let j = 1; j <= a.length; j++) {
+            if (b.charAt(i - 1) === a.charAt(j - 1)) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1));
+            }
+        }
+    }
+    return matrix[b.length][a.length];
+};
+
 let stream = null;
 let loop   = null;
 let busy   = false;
@@ -345,7 +363,16 @@ function logPlates(d) {
         // deduplicate by recent text (last 10 plates)
         const existing = Array.from(logList.querySelectorAll('.plate-text-cell')).slice(0, 10);
         for (const el of existing) {
-            if (el.textContent.trim() === p.text.trim()) return;
+            const oldText = el.textContent.trim();
+            const newText = p.text.trim();
+            // Treat as duplicate if OCR noise changes 2 or fewer characters
+            if (getEditDist(oldText, newText) <= 2) {
+                // Optionally update the row text to the higher-confidence read
+                if (p.confidence > 0.8) {
+                    el.textContent = newText;
+                }
+                return;
+            }
         }
 
         totalPlates++;
