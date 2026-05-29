@@ -29,6 +29,7 @@ let loop   = null;
 let busy   = false;
 let totalVehicles = 0;
 let totalPlates = 0;
+let activityHistory = new Array(12).fill(0);
 
 // ─── Mouse Tracking ───────────────────────────────────────
 let mouse = { x: null, y: null, radius: 150 };
@@ -344,6 +345,7 @@ function logPlates(d) {
         metricScanned.textContent = totalPlates;
         metricTotal.textContent = totalVehicles;
         metricRecognized.textContent = totalPlates;
+        activityHistory[11]++;
 
         const now = new Date();
         const dateStr = now.toLocaleDateString('en-GB'); // DD/MM/YYYY
@@ -376,3 +378,29 @@ function logPlates(d) {
         }
     });
 }
+
+// ─── Activity Graph Animation ────────────────────────────
+function updateActivityGraph() {
+    // shift history left (oldest falls off)
+    activityHistory.shift();
+    // add new bucket for the next segment
+    activityHistory.push(0);
+
+    const graph = document.getElementById('activity-graph');
+    if (!graph) return;
+    const bars = graph.children;
+    
+    // find max to scale the bars (minimum max of 2 to avoid huge bars for 1 car)
+    const maxVal = Math.max(2, ...activityHistory);
+    
+    for (let i = 0; i < 12; i++) {
+        if (bars[i]) {
+            const heightPct = (activityHistory[i] / maxVal) * 100;
+            // minimum height of 4% just so the bar is slightly visible even if 0
+            bars[i].style.height = Math.max(4, heightPct) + '%';
+        }
+    }
+}
+
+// Update the graph every 5 seconds (60 seconds total for 12 bars)
+setInterval(updateActivityGraph, 5000);

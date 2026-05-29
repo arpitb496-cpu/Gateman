@@ -108,19 +108,25 @@
             </div>
 
             <div class="mb-6">
-                <div class="text-[10px] text-slate-400 uppercase font-bold">Hourly Flow</div>
-                <div class="bar-chart-container">
-                    <div class="bar bg-blue-500/50 h-[0%]"></div>
-                    <div class="bar bg-blue-500/60 h-[0%]"></div>
-                    <div class="bar bg-blue-500/70 h-[0%]"></div>
-                    <div class="bar bg-blue-500/80 h-[0%]"></div>
-                    <div class="bar bg-emerald-400 h-[0%] shadow-[0_0_10px_rgba(52,211,153,0.5)]"></div>
-                    <div class="bar bg-blue-500/90 h-[0%]"></div>
-                    <div class="bar bg-blue-500/70 h-[0%]"></div>
-                    <div class="bar bg-blue-500/50 h-[0%]"></div>
+                <div class="text-[10px] text-slate-400 uppercase font-bold">Activity Flow (Last 60s)</div>
+                <div class="flex items-end h-12 gap-1 mt-2" id="activity-graph">
+                    <!-- 12 bars, heights will be set by JS -->
+                    <div class="w-full bg-blue-500/80 rounded-t-sm transition-all duration-300" style="height: 0%"></div>
+                    <div class="w-full bg-blue-500/80 rounded-t-sm transition-all duration-300" style="height: 0%"></div>
+                    <div class="w-full bg-blue-500/80 rounded-t-sm transition-all duration-300" style="height: 0%"></div>
+                    <div class="w-full bg-blue-500/80 rounded-t-sm transition-all duration-300" style="height: 0%"></div>
+                    <div class="w-full bg-blue-500/80 rounded-t-sm transition-all duration-300" style="height: 0%"></div>
+                    <div class="w-full bg-blue-500/80 rounded-t-sm transition-all duration-300" style="height: 0%"></div>
+                    <div class="w-full bg-blue-500/80 rounded-t-sm transition-all duration-300" style="height: 0%"></div>
+                    <div class="w-full bg-blue-500/80 rounded-t-sm transition-all duration-300" style="height: 0%"></div>
+                    <div class="w-full bg-blue-500/80 rounded-t-sm transition-all duration-300" style="height: 0%"></div>
+                    <div class="w-full bg-blue-500/80 rounded-t-sm transition-all duration-300" style="height: 0%"></div>
+                    <div class="w-full bg-blue-500/80 rounded-t-sm transition-all duration-300" style="height: 0%"></div>
+                    <div class="w-full bg-emerald-400 rounded-t-sm transition-all duration-300 shadow-[0_0_8px_rgba(52,211,153,0.5)]" style="height: 0%"></div>
                 </div>
                 <div class="flex justify-between text-[9px] text-slate-500 mt-1 font-mono">
-                    <span>1 2 3 4 5 6 7 8 9 10 11 12</span>
+                    <span>-60s</span>
+                    <span>Now</span>
                 </div>
             </div>
 
