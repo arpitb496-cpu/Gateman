@@ -1,9 +1,9 @@
 # AI Gateman
 
-### The Pitch (What & Why)
-Manual gate logging is slow, error-prone, and poses significant security risks. **AI Gateman** is a real-time, edge-optimized Automatic Number Plate Recognition (ANPR) dashboard that instantly detects approaching vehicles, extracts their license plates using computer vision, and automatically grants or denies access based on a security whitelist.
+### Overview
+Manual gate logging is slow, error-prone, and poses significant security risks. **AI Gateman** is a real-time, edge-optimized Automatic Number Plate Recognition (ANPR) dashboard that I developed as a personal project to instantly detect approaching vehicles, extract their license plates using computer vision, and automatically log entry/exit data.
 
-### Visual Proof 
+### System Architecture 
 Below is the system architecture demonstrating the core feature workflow:
 
 ```mermaid
@@ -65,10 +65,7 @@ graph TD
 6. **View the Application**
    Open your browser and navigate to `http://localhost:3000`. Select your webcam from the dropdown and click "Start" to begin live detection!
 
-### Context
-This project serves as a proof-of-concept for an accessible, low-latency security gateway system. It tackles the challenge of high-accuracy OCR in varying environments by employing a dual-YOLO cropping strategy (detecting the macro vehicle first, then isolating the micro license plate) before passing the highly optimized frame to EasyOCR. 
-
-### Future Roadmap & Next Steps
+### Future Roadmap
 * **Database Migration**: Transition from flat CSV logging to a robust SQL database (e.g., PostgreSQL) for advanced querying and analytics.
 * **Low-Light Optimization**: Implement image enhancement pipelines (like CLAHE) to boost plate readability during night-time operations.
 * **IoT Hardware Integration**: Connect the backend to physical relays (via Raspberry Pi or ESP32) to automatically lift boom barriers upon whitelist authorization.
