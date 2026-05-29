@@ -335,7 +335,9 @@ function logPlates(d) {
 
         // deduplicate by recent text (last 10 plates)
         const existing = Array.from(logList.querySelectorAll('.plate-text-cell')).slice(0, 10);
-        for (const el of existing) if (el.textContent === p.text) return;
+        for (const el of existing) {
+            if (el.textContent.trim() === p.text.trim()) return;
+        }
 
         totalPlates++;
         totalVehicles++;
