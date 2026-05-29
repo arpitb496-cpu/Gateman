@@ -23,12 +23,15 @@ const pCtx       = pCanvas.getContext('2d');
 const metricTotal = document.getElementById('metric-total');
 const metricScanned = document.getElementById('metric-scanned');
 const metricRecognized = document.getElementById('metric-recognized');
+const metricRealtime = document.getElementById('metric-realtime');
+const metricScannedPct = document.getElementById('metric-scanned-percent');
 
 let stream = null;
 let loop   = null;
 let busy   = false;
 let totalVehicles = 0;
 let totalPlates = 0;
+let totalConfidenceSum = 0;
 let activityHistory = new Array(12).fill(0);
 
 // ─── Mouse Tracking ───────────────────────────────────────
@@ -246,8 +249,13 @@ async function detect() {
         if (!blob) { busy = false; return; }
         const fd = new FormData();
         fd.append('file', blob, 'f.jpg');
+        
+        const startTime = performance.now();
         try {
             const r = await fetch(`${API}/detect`, { method: 'POST', body: fd });
+            const latency = Math.round(performance.now() - startTime);
+            if (metricRealtime) metricRealtime.textContent = `${latency} ms`;
+            
             if (r.ok) {
                 const d = await r.json();
                 draw(d);
@@ -342,9 +350,16 @@ function logPlates(d) {
 
         totalPlates++;
         totalVehicles++;
+        totalConfidenceSum += (p.confidence || 0);
+        
         metricScanned.textContent = totalPlates;
         metricTotal.textContent = totalVehicles;
         metricRecognized.textContent = totalPlates;
+        if (metricScannedPct) {
+            const avgConf = Math.round((totalConfidenceSum / totalPlates) * 100);
+            metricScannedPct.textContent = `${avgConf}%`;
+        }
+        
         activityHistory[11]++;
 
         const now = new Date();
