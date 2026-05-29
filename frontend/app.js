@@ -22,6 +22,7 @@ const pCanvas    = document.getElementById('particle-canvas');
 const pCtx       = pCanvas.getContext('2d');
 const metricTotal = document.getElementById('metric-total');
 const metricScanned = document.getElementById('metric-scanned');
+const metricRecognized = document.getElementById('metric-recognized');
 
 let stream = null;
 let loop   = null;
@@ -325,11 +326,6 @@ function draw(d) {
 
 // ─── Log Panel ───────────────────────────────────────────
 function logPlates(d) {
-    if (d.cars && d.cars.length > 0) {
-        totalVehicles += d.cars.length;
-        metricTotal.textContent = totalVehicles;
-    }
-
     d.plates.forEach(p => {
         if (p.text === '...' || p.text.length < 4) return;
 
@@ -342,7 +338,10 @@ function logPlates(d) {
         for (const el of existing) if (el.textContent === p.text) return;
 
         totalPlates++;
+        totalVehicles++;
         metricScanned.textContent = totalPlates;
+        metricTotal.textContent = totalVehicles;
+        metricRecognized.textContent = totalPlates;
 
         const now = new Date();
         const dateStr = now.toLocaleDateString('en-GB'); // DD/MM/YYYY

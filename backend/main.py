@@ -13,11 +13,21 @@ from openpyxl.styles import Font, PatternFill, Alignment
 
 app = FastAPI(title="Automatic Gateman API")
 
-def clean_and_validate_plate(text):
-    """Filters out garbage OCR. Forgiving logic to ensure we don't reject valid detections."""
+def clean_and_validate_plate(text, strict=False):
+    """Filters out garbage OCR. strict=True enforces Indian formats."""
     text = re.sub(r'[^A-Z0-9]', '', text.upper())
     
-    # Just ensure it's at least 4 characters and has at least one number
+    if strict:
+        valid_states = 'AP|AR|AS|BR|CG|GA|GJ|HR|HP|JH|KA|KL|MP|MH|MN|ML|MZ|NL|OD|PB|RJ|SK|TN|TS|TR|UP|UK|WB|AN|CH|DN|DD|DL|JK|LA|LD|PY'
+        match = re.search(f'({valid_states})[A-Z0-9]{{4,9}}', text)
+        if match and sum(c.isdigit() for c in match.group(0)) >= 3:
+            return match.group(0)
+        bh_match = re.search(r'\d{2}BH[A-Z0-9]{4,6}', text)
+        if bh_match and sum(c.isdigit() for c in bh_match.group(0)) >= 3:
+            return bh_match.group(0)
+        return None
+
+    # Forgiving logic
     if len(text) >= 4 and any(c.isdigit() for c in text):
         return text
         
@@ -237,21 +247,15 @@ async def detect_objects(file: UploadFile = File(...)):
 
     # Fallback 2: If YOLO plate detector failed entirely, run direct OCR on full frame with strict validation
     if not plates_detected:
-        # Crop center 60% of the frame to keep OCR fast while retaining full resolution
-        h, w = frame.shape[:2]
-        cx1, cx2 = int(w * 0.2), int(w * 0.8)
-        cy1, cy2 = int(h * 0.2), int(h * 0.8)
-        
-        center_crop = frame[cy1:cy2, cx1:cx2]
-        gray = cv2.cvtColor(center_crop, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         ocr_results = reader.readtext(gray, detail=1, paragraph=False)
         
         for (bbox, text, conf) in ocr_results:
-            valid_text = clean_and_validate_plate(text)
+            valid_text = clean_and_validate_plate(text, strict=True)
             if valid_text:
-                # Map coordinates back to the full frame
-                xs = [pt[0] + cx1 for pt in bbox]
-                ys = [pt[1] + cy1 for pt in bbox]
+                # Map coordinates
+                xs = [pt[0] for pt in bbox]
+                ys = [pt[1] for pt in bbox]
                 fx1, fy1, fx2, fy2 = int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))
                 
                 plates_detected.append({
