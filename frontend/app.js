@@ -5,7 +5,7 @@
 
 // When you deploy to Hugging Face, change this to your live URL
 // Example: const API = "https://your-username-gateman.hf.space";
-const API = "http://127.0.0.1:8000";
+const API = "https://arpitcodes-gateman-api.hf.space";
 
 // DOM refs
 const video      = document.getElementById('video-feed');
