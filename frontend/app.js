@@ -194,13 +194,14 @@ setInterval(ping, 5000);
 
 // ─── Export to Excel ─────────────────────────────────────
 function exportExcel() {
-    window.location.href = `${API}/export-excel`;
+    window.open(`${API}/export-excel`, '_blank');
 }
 
 // ─── Camera Enumeration ──────────────────────────────────
 (async function listCams() {
     try {
-        await navigator.mediaDevices.getUserMedia({ video: true });
+        // Request environment camera first to wake it up
+        await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
         const devs = await navigator.mediaDevices.enumerateDevices();
         const cams = devs.filter(d => d.kind === 'videoinput');
         camSelect.innerHTML = '';
@@ -208,12 +209,27 @@ function exportExcel() {
             camSelect.innerHTML = '<option value="">No cameras</option>';
             return;
         }
-        cams.forEach(d => {
+        
+        let backCamIndex = -1;
+        cams.forEach((d, i) => {
             const o = document.createElement('option');
             o.value = d.deviceId;
             o.text  = d.label || `Camera ${camSelect.length + 1}`;
             camSelect.appendChild(o);
+            
+            // Try to identify the back camera by name
+            if (o.text.toLowerCase().match(/back|environment|rear/)) {
+                backCamIndex = i;
+            }
         });
+        
+        // If we found a back camera by name, select it.
+        // Otherwise, if there are multiple cameras, default to the last one (usually back on phones)
+        if (backCamIndex !== -1) {
+            camSelect.selectedIndex = backCamIndex;
+        } else if (cams.length > 1) {
+            camSelect.selectedIndex = cams.length - 1;
+        }
     } catch {
         camSelect.innerHTML = '<option value="">Permission denied</option>';
     }
