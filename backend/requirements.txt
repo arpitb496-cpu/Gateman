@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+torch
+torchvision
+torchaudio
+ultralytics
+easyocr
+openpyxl
+supabase
+opencv-python-headless
+pillow

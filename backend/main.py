@@ -10,8 +10,20 @@ from datetime import datetime
 from PIL import Image
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
+from supabase import create_client, Client
 
 app = FastAPI(title="Automatic Gateman API")
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("Connected to Supabase Cloud Database!")
+    except Exception as e:
+        print(f"Supabase connection failed: {e}")
 
 def clean_and_validate_plate(text, strict=False):
     """Filters out garbage OCR. strict=True enforces Indian formats."""
@@ -58,13 +70,26 @@ def get_whitelist():
     with open(WHITELIST_FILE, "r") as f:
         return set(line.strip().replace(" ", "").upper() for line in f if line.strip())
 
-def log_plate_to_csv(plate_text, status):
-    """Appends recognized plate to the CSV/Excel log sheet."""
-    file_exists = os.path.exists(LOG_FILE)
+def log_plate_to_db(plate_text, status):
+    """Appends recognized plate to Supabase (if configured) or local CSV fallback."""
     now = datetime.now()
     date_str = now.strftime("%Y-%m-%d")
     time_str = now.strftime("%H:%M:%S")
+
+    if supabase:
+        try:
+            supabase.table("detection_log").insert({
+                "date": date_str,
+                "time": time_str,
+                "plate_number": plate_text,
+                "status": status
+            }).execute()
+            return
+        except Exception as e:
+            print(f"Failed to log to Supabase: {e}")
     
+    # Fallback to local CSV if Supabase isn't configured
+    file_exists = os.path.exists(LOG_FILE)
     with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if not file_exists:
@@ -81,8 +106,8 @@ try:
 
     print("Loading Models...")
     reader = easyocr.Reader(['en'], gpu=False, verbose=False)
-    car_model = YOLO('../yolov8n.pt')
-    plate_model = YOLO('../kbest.pt')
+    car_model = YOLO('yolov8n.pt')
+    plate_model = YOLO('kbest.pt')
     print("Models Loaded successfully!")
 except ImportError as e:
     print(f"Warning: Failed to load AI libraries ({e}). Running in MOCK mode.")
@@ -126,7 +151,7 @@ async def detect_objects(file: UploadFile = File(...)):
         cx, cy = width // 2, height // 2
         mock_plate = "22BH6517A"
         status = "ALLOWED" if mock_plate in whitelist else "UNKNOWN"
-        log_plate_to_csv(mock_plate, status)
+        log_plate_to_db(mock_plate, status)
         
         return DetectionResult(
             cars=[{
@@ -250,34 +275,45 @@ async def detect_objects(file: UploadFile = File(...)):
                     "vehicle_type": "Unknown"
                 })
 
+
+
     # Fallback 2: If YOLO plate detector failed entirely, run direct OCR on full frame with strict validation
     if not plates_detected:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Resize to 320px because EasyOCR struggles to read letters that are extremely large (filling the screen)
+        scale = min(1.0, 320.0 / frame.shape[1])
+        small_frame = cv2.resize(frame, (0, 0), fx=scale, fy=scale)
+        gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+        
         ocr_results = reader.readtext(gray, detail=1, paragraph=False)
         
-        for (bbox, text, conf) in ocr_results:
-            valid_text = clean_and_validate_plate(text, strict=True)
+        if ocr_results:
+            raw_text = ''.join([res[1] for res in ocr_results])
+            print(f"[DEBUG] Raw OCR Text Combined: {raw_text}")
+            avg_conf = sum([res[2] for res in ocr_results]) / len(ocr_results)
+            valid_text = clean_and_validate_plate(raw_text, strict=True)
+            print(f"[DEBUG] Validated Text: {valid_text}")
+            
             if valid_text:
-                # Map coordinates
-                xs = [pt[0] for pt in bbox]
-                ys = [pt[1] for pt in bbox]
-                fx1, fy1, fx2, fy2 = int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))
+                xs = []
+                ys = []
+                for (bbox, text, conf) in ocr_results:
+                    xs.extend([pt[0] / scale for pt in bbox])
+                    ys.extend([pt[1] / scale for pt in bbox])
                 
-                plates_detected.append({
-                    "box": [fx1, fy1, fx2, fy2],
-                    "text": valid_text,
-                    "confidence": float(conf),
-                    "vehicle_type": "Unknown"
-                })
-                break
-
-    # 3. Whitelist check and CSV Logging
+                if xs and ys:
+                    fx1, fy1, fx2, fy2 = int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))
+                    plates_detected.append({
+                        "box": [fx1, fy1, fx2, fy2],
+                        "text": valid_text,
+                        "confidence": float(avg_conf),
+                        "vehicle_type": "Unknown"
+                    })
     for plate in plates_detected:
         plate_val = plate["text"]
         if plate_val != "...":
             status = "ALLOWED" if plate_val in whitelist else "UNKNOWN"
             global_status = status
-            log_plate_to_csv(plate_val, status)
+            log_plate_to_db(plate_val, status)
             break # Update status on the first valid read
 
     return DetectionResult(
@@ -322,13 +358,21 @@ def export_excel():
     ws.column_dimensions['C'].width = 20
     ws.column_dimensions['D'].width = 15
     
-    # 4. Read Data from CSV
-    if os.path.exists(LOG_FILE):
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
-            reader = csv.reader(f)
-            next(reader, None) # Skip original CSV header
-            for row in reader:
-                ws.append(row)
+    # 4. Read Data from Supabase or CSV Fallback
+    if supabase:
+        try:
+            response = supabase.table("detection_log").select("*").execute()
+            for row in response.data:
+                ws.append([row.get("date", ""), row.get("time", ""), row.get("plate_number", ""), row.get("status", "")])
+        except Exception as e:
+            print(f"Failed to export from Supabase: {e}")
+    else:
+        if os.path.exists(LOG_FILE):
+            with open(LOG_FILE, "r", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                next(reader, None) # Skip original CSV header
+                for row in reader:
+                    ws.append(row)
                 
     # Center align the data rows
     for row in ws.iter_rows(min_row=4, max_row=ws.max_row, min_col=1, max_col=4):

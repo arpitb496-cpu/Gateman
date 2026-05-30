@@ -3,6 +3,8 @@
    Camera capture, API calls, canvas overlay, parallax & glow
    ============================================================ */
 
+// When you deploy to Hugging Face, change this to your live URL
+// Example: const API = "https://your-username-gateman.hf.space";
 const API = "http://127.0.0.1:8000";
 
 // DOM refs
