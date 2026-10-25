@@ -43,6 +43,10 @@
             overflow-x: hidden;
         }
 
+        .hidden {
+            display: none !important;
+        }
+
         body {
             font-family: 'Inter', sans-serif;
             background-color: #030712;
@@ -474,13 +478,24 @@
                     <label for="auth-token-input" class="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wider">
                         Admin Bearer Token
                     </label>
-                    <input
-                        type="password"
-                        id="auth-token-input"
-                        autocomplete="current-password"
-                        placeholder="Enter token (e.g. gateman_admin_token_...)"
-                        class="touch-target w-full bg-slate-900 border border-slate-700 text-base px-3.5 py-2.5 rounded-xl font-mono text-white placeholder-slate-500 outline-none focus:border-blue-500 transition-colors"
-                    />
+                    <div class="relative">
+                        <input
+                            type="password"
+                            id="auth-token-input"
+                            autocomplete="current-password"
+                            placeholder="Enter token (e.g. gateman_admin_token_...)"
+                            class="touch-target w-full bg-slate-900 border border-slate-700 text-base px-3.5 py-2.5 pr-12 rounded-xl font-mono text-white placeholder-slate-500 outline-none focus:border-blue-500 transition-colors"
+                        />
+                        <button
+                            type="button"
+                            onclick="toggleTokenVisibility()"
+                            class="touch-target absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white px-2.5 flex items-center justify-center cursor-pointer"
+                            aria-label="Toggle token visibility"
+                            title="Show/Hide token"
+                        >
+                            <i data-lucide="eye" id="token-eye-icon" class="w-4 h-4"></i>
+                        </button>
+                    </div>
                     <div id="auth-token-error" class="hidden mt-2 text-xs text-rose-400 font-medium flex items-center gap-1.5">
                         <i data-lucide="alert-circle" class="w-3.5 h-3.5 flex-shrink-0"></i>
                         <span id="auth-token-error-text">Invalid token</span>

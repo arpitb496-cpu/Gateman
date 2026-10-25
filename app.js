@@ -56,13 +56,16 @@ function showTokenModal(errorMessage = '') {
 
     if (modal) {
         modal.classList.remove('hidden');
+        modal.style.display = 'flex';
     }
     if (errBox && errTxt) {
         if (errorMessage) {
             errTxt.textContent = errorMessage;
             errBox.classList.remove('hidden');
+            errBox.style.display = 'flex';
         } else {
             errBox.classList.add('hidden');
+            errBox.style.display = 'none';
         }
     }
     if (input) {
@@ -77,15 +80,31 @@ function hideTokenModal() {
     const errBox = document.getElementById('auth-token-error');
     if (modal) {
         modal.classList.add('hidden');
+        modal.style.display = 'none';
     }
     if (errBox) {
         errBox.classList.add('hidden');
+        errBox.style.display = 'none';
     }
 }
 
 function handleUnauthorized() {
     setAuthToken('');
     lockDashboard('LOCKED - enter token');
+}
+
+function toggleTokenVisibility() {
+    const input = document.getElementById('auth-token-input');
+    const icon = document.getElementById('token-eye-icon');
+    if (!input) return;
+    if (input.type === 'password') {
+        input.type = 'text';
+        if (icon) icon.setAttribute('data-lucide', 'eye-off');
+    } else {
+        input.type = 'password';
+        if (icon) icon.setAttribute('data-lucide', 'eye');
+    }
+    if (window.lucide) lucide.createIcons();
 }
 
 async function submitAuthToken() {
@@ -96,7 +115,14 @@ async function submitAuthToken() {
     const errBox = document.getElementById('auth-token-error');
     const errTxt = document.getElementById('auth-token-error-text');
 
-    const candidate = input ? input.value.trim() : '';
+    let candidate = input ? input.value.trim() : '';
+    // Strip leading "Bearer " if user accidentally included it
+    if (candidate.toLowerCase().startsWith('bearer ')) {
+        candidate = candidate.slice(7).trim();
+    }
+    // Strip wrapping single, double, or smart/curly quotes
+    candidate = candidate.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim();
+
     if (!candidate) {
         if (errBox && errTxt) {
             errTxt.textContent = 'Token cannot be empty';
@@ -133,11 +159,11 @@ async function submitAuthToken() {
             }
         } else {
             const errData = await res.json().catch(() => ({}));
-            const msg = errData.detail || (res.status === 401 ? 'Invalid authentication token' : `Server error: HTTP ${res.status}`);
+            const msg = errData.detail || (res.status === 401 ? 'Invalid authentication token (case-sensitive)' : `Server error: HTTP ${res.status}`);
             showTokenModal(msg);
         }
     } catch (err) {
-        showTokenModal('Connection error: ' + err.message);
+        showTokenModal('Connection error: Cannot reach backend API on port 8000. Is uvicorn running?');
     } finally {
         isVerifyingToken = false;
         if (submitBtn) submitBtn.disabled = false;
@@ -510,7 +536,10 @@ function toggleWhitelistModal() {
     const modal = document.getElementById('whitelist-modal');
     if (!modal) return;
     modal.classList.toggle('hidden');
-    if (!modal.classList.contains('hidden')) {
+    if (modal.classList.contains('hidden')) {
+        modal.style.display = 'none';
+    } else {
+        modal.style.display = 'flex';
         loadWhitelist();
         if (window.lucide) lucide.createIcons();
     }

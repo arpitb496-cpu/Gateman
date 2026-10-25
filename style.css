@@ -673,3 +673,7 @@ body:hover .cursor-glow {
     min-height: 44px;
     min-width: 44px;
 }
+
+.hidden {
+    display: none !important;
+}

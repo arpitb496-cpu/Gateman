@@ -80,7 +80,8 @@ def __getattr__(name: str):
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 def get_admin_token() -> str:
-    token = os.environ.get("GATEMAN_ADMIN_TOKEN", "")
+    raw = os.environ.get("GATEMAN_ADMIN_TOKEN", "")
+    token = raw.strip().strip('"\'')
     if not token or len(token) < 16:
         raise RuntimeError("GATEMAN_ADMIN_TOKEN environment variable must be set and at least 16 characters long.")
     return token
@@ -130,7 +131,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        token = auth_header[7:].strip()
+        token = auth_header[7:].strip().strip('"\'')
         try:
             admin_token = get_admin_token()
         except Exception as e:
