@@ -250,6 +250,7 @@ async function loadHistoricalLogsAndStats() {
                 const emptyRow = document.getElementById('log-empty-row');
                 if (emptyRow) emptyRow.remove();
 
+                data.logs.forEach(item => {
                     let statusBadge = '';
                     if (item.status === 'ALLOWED') {
                         statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">✔ ALLOWED</span>';
