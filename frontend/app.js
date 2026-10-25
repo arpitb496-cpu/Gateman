@@ -694,7 +694,7 @@ async function start() {
         }
 
         manualScanBtn.style.display = 'flex';
-        lucide.createIcons();
+        if (window.lucide) lucide.createIcons();
 
         // Start scanning automatically 500ms after optical feed stabilizes
         setTimeout(() => {
@@ -724,7 +724,7 @@ function stop() {
     hideStatusOverlay();
 }
 
-manualScanBtn.addEventListener('click', detect);
+manualScanBtn.addEventListener('click', manualScan);
 startBtn.addEventListener('click', start);
 stopBtn.addEventListener('click', stop);
 
@@ -767,7 +767,7 @@ function toggleSound() {
         }
         if (window.speechSynthesis) window.speechSynthesis.cancel();
     }
-    lucide.createIcons();
+    if (window.lucide) lucide.createIcons();
 }
 
 function playTone(freq, type, duration, delay = 0, gainLevel = 0.2) {
@@ -997,7 +997,7 @@ function showStatusOverlay(status) {
         return;
     }
 
-    lucide.createIcons();
+    if (window.lucide) lucide.createIcons();
     statusTimer = setTimeout(hideStatusOverlay, 3500);
 }
 
@@ -1008,6 +1008,95 @@ function hideStatusOverlay() {
 }
 
 // ─── Frame Capture → API ─────────────────────────────────────
+function captureFrameBlob() {
+    return new Promise(resolve => {
+        if (!stream || !video.videoWidth) {
+            resolve(null);
+            return;
+        }
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        if (canvas.width !== vw || canvas.height !== vh) {
+            canvas.width  = vw;
+            canvas.height = vh;
+        }
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width  = vw;
+        tempCanvas.height = vh;
+        tempCanvas.getContext('2d').drawImage(video, 0, 0);
+        tempCanvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.85);
+    });
+}
+
+async function sendFrameForDetection(blob) {
+    if (!blob) return null;
+    const fd = new FormData();
+    fd.append('file', blob, 'frame.jpg');
+
+    const t0 = performance.now();
+    try {
+        const r = await fetchWithAuth(`${API}/detect`, { method: 'POST', body: fd });
+        const latency = Math.round(performance.now() - t0);
+        if (metricRealtime) metricRealtime.textContent = `${latency} ms`;
+
+        if (r.ok) {
+            return await r.json();
+        } else {
+            if (r.status === 503) {
+                setSystemOffline(true);
+            } else if (r.status === 401) {
+                hideStatusOverlay();
+                if (statusOverlay) {
+                    statusOverlay.className = 'status-overlay unknown';
+                    statusOverlay.innerHTML = '<span class="flex items-center gap-2"><i data-lucide="shield-alert" class="w-5 h-5"></i> 401 UNAUTHORIZED</span>';
+                    if (window.lucide) lucide.createIcons();
+                }
+            }
+            throw new Error(`API returned HTTP ${r.status}`);
+        }
+    } catch (e) {
+        console.error('API Error:', e);
+        if (!e || !e.message || !e.message.includes('401')) {
+            setSystemOffline(true);
+        }
+        throw e;
+    }
+}
+
+function handleDetectionData(data) {
+    if (!data) return null;
+    draw(data);
+    logPlates(data);
+
+    if (data.plates && data.plates.length > 0 && data.plates[0].text !== '...') {
+        const topPlate = data.plates[0];
+        if (!isSystemOffline && topPlate.status) {
+            showStatusOverlay(topPlate.status);
+        }
+        if (statusText && !isSystemOffline) {
+            statusText.textContent = `Scanned: ${topPlate.text}`;
+        }
+        if (!isSystemOffline) {
+            handleGateAccess(topPlate.text, topPlate.status);
+        }
+        return topPlate;
+    } else {
+        if (!isSystemOffline && data.status) {
+            showStatusOverlay(data.status);
+        }
+        if (statusText && !isSystemOffline) {
+            statusText.textContent = 'Optical Feed Active';
+        }
+        return null;
+    }
+}
+
+async function detectFrame() {
+    const blob = await captureFrameBlob();
+    if (!blob) return null;
+    return await sendFrameForDetection(blob);
+}
+
 async function detect() {
     const token = getAuthToken();
     if (!token || isDashboardLocked) {
@@ -1017,105 +1106,139 @@ async function detect() {
     if (busy || !stream || !video.videoWidth) return;
     busy = true;
 
-    const originalBtn = manualScanBtn.innerHTML;
-    if (!autoScanOn) {
-        manualScanBtn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Scanning...</span>';
-        manualScanBtn.disabled  = true;
-        lucide.createIcons();
-    }
-
-    const vw = video.videoWidth;
-    const vh = video.videoHeight;
-
-    // Ensure display canvas matches live video feed dimensions
-    if (canvas.width !== vw || canvas.height !== vh) {
-        canvas.width  = vw;
-        canvas.height = vh;
-    }
-
-    // Capture at full native resolution for crystal-clear OCR character recognition
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width  = vw;
-    tempCanvas.height = vh;
-    tempCanvas.getContext('2d').drawImage(video, 0, 0);
-
-    tempCanvas.toBlob(async blob => {
-        if (!blob) {
-            busy = false;
-            if (!autoScanOn) {
-                manualScanBtn.innerHTML = originalBtn;
-                manualScanBtn.disabled  = false;
-                lucide.createIcons();
-            }
+    try {
+        const data = await detectFrame();
+        if (data) {
+            handleDetectionData(data);
+        }
+    } catch (e) {
+        // Logging & offline status handled in sendFrameForDetection
+    } finally {
+        busy = false;
+        if (!isSystemOffline) {
             triggerNextScan();
-            return;
         }
-
-        const fd = new FormData();
-        fd.append('file', blob, 'frame.jpg');
-
-        const t0 = performance.now();
-        try {
-            const r = await fetchWithAuth(`${API}/detect`, { method: 'POST', body: fd });
-            const latency = Math.round(performance.now() - t0);
-            if (metricRealtime) metricRealtime.textContent = `${latency} ms`;
-
-            if (r.ok) {
-                const data = await r.json();
-
-                draw(data);
-                logPlates(data);
-
-                if (data.plates && data.plates.length > 0 && data.plates[0].text !== '...') {
-                    const topPlate = data.plates[0];
-                    if (!isSystemOffline && topPlate.status) {
-                        showStatusOverlay(topPlate.status);
-                    }
-                    if (statusText && !isSystemOffline) {
-                        statusText.textContent = `Scanned: ${topPlate.text}`;
-                    }
-                    if (!isSystemOffline) {
-                        handleGateAccess(topPlate.text, topPlate.status);
-                    }
-                } else {
-                    if (!isSystemOffline && data.status) {
-                        showStatusOverlay(data.status);
-                    }
-                    if (statusText && !isSystemOffline) {
-                        statusText.textContent = 'Optical Feed Active';
-                    }
-                }
-            } else {
-                if (r.status === 503) {
-                    setSystemOffline(true);
-                } else if (r.status === 401) {
-                    hideStatusOverlay();
-                    if (statusOverlay) {
-                        statusOverlay.className = 'status-overlay unknown';
-                        statusOverlay.innerHTML = '<span class="flex items-center gap-2"><i data-lucide="shield-alert" class="w-5 h-5"></i> 401 UNAUTHORIZED</span>';
-                        if (window.lucide) lucide.createIcons();
-                    }
-                }
-                throw new Error(`API returned HTTP ${r.status}`);
-            }
-        } catch (e) {
-            console.error('API Error:', e);
-            if (!e || !e.message || !e.message.includes('401')) {
-                setSystemOffline(true);
-            }
-        } finally {
-            busy = false;
-            if (!autoScanOn) {
-                manualScanBtn.innerHTML = originalBtn;
-                manualScanBtn.disabled  = false;
-                lucide.createIcons();
-            }
-            if (!isSystemOffline) {
-                triggerNextScan();
-            }
-        }
-    }, 'image/jpeg', 0.85);
+    }
 }
+
+let isManualScanning = false;
+
+function restoreManualBtn() {
+    if (manualScanBtn) {
+        manualScanBtn.innerHTML = '<i data-lucide="scan" class="w-4 h-4"></i><span>Scan Plate Now</span>';
+        manualScanBtn.disabled = false;
+        if (window.lucide) {
+            lucide.createIcons();
+        }
+    }
+}
+
+async function manualScan() {
+    const token = getAuthToken();
+    if (!token || isDashboardLocked) {
+        lockDashboard('LOCKED - enter token');
+        return;
+    }
+    if (!stream || !video.videoWidth) {
+        alert('Please click "Start" to activate the camera first!');
+        return;
+    }
+    if (isManualScanning) return;
+    isManualScanning = true;
+
+    if (manualScanBtn) {
+        manualScanBtn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Scanning...</span>';
+        manualScanBtn.disabled = true;
+        if (window.lucide) {
+            lucide.createIcons();
+        }
+    }
+
+    let hardTimer = null;
+
+    try {
+        const timeoutPromise = new Promise((_, reject) => {
+            hardTimer = setTimeout(() => reject(new Error('Manual scan timeout')), 6000);
+        });
+
+        const burstPromise = (async () => {
+            const maxFrames = 8;
+            const delayMs = 250;
+            let plateRecognised = false;
+
+            for (let i = 0; i < maxFrames; i++) {
+                if (isSystemOffline || !stream) break;
+
+                if (i > 0) {
+                    await new Promise(r => setTimeout(r, delayMs));
+                }
+                if (isSystemOffline || !stream) break;
+
+                // Wait briefly if an auto-scan frame is currently in flight
+                let waitCount = 0;
+                while (busy && waitCount < 10) {
+                    await new Promise(r => setTimeout(r, 25));
+                    waitCount++;
+                }
+
+                try {
+                    busy = true;
+                    const blob = await captureFrameBlob();
+                    if (!blob) {
+                        busy = false;
+                        continue;
+                    }
+                    const data = await sendFrameForDetection(blob);
+                    busy = false;
+
+                    if (!data) continue;
+
+                    const recognisedPlate = data.plates && data.plates.find(
+                        p => p.text && p.text !== '...' && p.text !== 'SCANNING...'
+                    );
+
+                    if (recognisedPlate) {
+                        plateRecognised = true;
+                        handleDetectionData(data);
+                        break;
+                    } else {
+                        // Still draw vehicle bounding boxes / current detection on frame during burst
+                        draw(data);
+                    }
+                } catch (err) {
+                    busy = false;
+                    console.warn('Manual scan frame notice:', err);
+                    if (isSystemOffline) break;
+                } finally {
+                    busy = false;
+                }
+            }
+
+            if (!plateRecognised) {
+                // Clear the "SCANNING..." label from the canvas overlay
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                if (statusText && !isSystemOffline) {
+                    statusText.textContent = 'No plate read - try again';
+                }
+            }
+        })();
+
+        await Promise.race([burstPromise, timeoutPromise]);
+    } catch (err) {
+        if (err && err.message === 'Manual scan timeout') {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (statusText && !isSystemOffline) {
+                statusText.textContent = 'No plate read - try again';
+            }
+        }
+    } finally {
+        if (hardTimer) clearTimeout(hardTimer);
+        restoreManualBtn();
+        isManualScanning = false;
+    }
+}
+window.manualScan = manualScan;
+
 
 // ─── Canvas Overlay Rendering ────────────────────────────────
 function draw(d) {

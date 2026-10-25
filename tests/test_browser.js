@@ -268,6 +268,113 @@ async function runTests() {
     );
     console.log('✓ Verified: detect() network failure displays offline banner and stops auto-scan');
 
+    // Restore system online for manual scan tests
+    window.fetch = async (url) => {
+        if (url.includes('/health')) {
+            return { ok: true, status: 200, json: async () => ({ status: 'ok' }) };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+    };
+    await window.ping();
+    assert.strictEqual(banner.classList.contains('hidden'), true);
+
+    // 7. Manual Scan Tests
+    const manualScanBtn = window.document.getElementById('manual-scan-btn');
+    const statusTextElem = window.document.getElementById('status-text');
+
+    // 7a: Every frame returns '...' -> button restored and "No plate read" shown
+    console.log('\n--- Testing Manual Scan 4(a): Every frame returns "..." ---');
+    window.setAutoScan(false);
+
+    window.fetch = async (url) => {
+        if (url.includes('/detect')) {
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({
+                    cars: [{ box: [10, 10, 200, 200], confidence: 0.9 }],
+                    plates: [{ box: [50, 50, 150, 100], text: '...', confidence: 0.1, status: 'UNKNOWN' }]
+                })
+            };
+        }
+        return { ok: true, status: 200, json: async () => ({ status: 'ok' }) };
+    };
+
+    await window.manualScan();
+
+    assert.strictEqual(manualScanBtn.disabled, false, 'Manual scan button must be restored/enabled after scan completes');
+    assert.strictEqual(manualScanBtn.innerHTML.includes('Scan Plate Now'), true, 'Manual scan button should show "Scan Plate Now"');
+    assert.strictEqual(statusTextElem.textContent.includes('No plate read'), true, 'Status text should show "No plate read - try again"');
+    console.log('✓ Verified 4(a): Every frame returns "..." -> button restored and "No plate read" shown');
+
+    // 7b: Auto-Scan toggled ON during a manual scan -> button restored
+    console.log('\n--- Testing Manual Scan 4(b): Auto-Scan toggled ON during manual scan ---');
+    window.setAutoScan(false);
+
+    window.fetch = async (url) => {
+        if (url.includes('/detect')) {
+            await new Promise(r => setTimeout(r, 60));
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({
+                    cars: [],
+                    plates: [{ box: [50, 50, 150, 100], text: '...', status: 'UNKNOWN' }]
+                })
+            };
+        }
+        return { ok: true, status: 200, json: async () => ({ status: 'ok' }) };
+    };
+
+    const manualScanPromise = window.manualScan();
+
+    // Give it a moment to enter the burst loop and set button to spinning
+    await new Promise(r => setTimeout(r, 40));
+    assert.strictEqual(manualScanBtn.disabled, true, 'Button should be disabled during manual scan');
+    assert.strictEqual(manualScanBtn.innerHTML.includes('Scanning...'), true, 'Button should show "Scanning..."');
+
+    // Toggle Auto-Scan ON while manual scan is running
+    window.setAutoScan(true);
+    assert.strictEqual(autoscanToggle.getAttribute('aria-pressed'), 'true', 'Auto-Scan should now be ON');
+
+    // Wait for manual scan to complete
+    await manualScanPromise;
+
+    assert.strictEqual(manualScanBtn.disabled, false, 'Button must be restored even if Auto-Scan is toggled ON');
+    assert.strictEqual(manualScanBtn.innerHTML.includes('Scan Plate Now'), true, 'Button text must return to "Scan Plate Now"');
+    console.log('✓ Verified 4(b): Auto-Scan toggled ON during manual scan -> button restored');
+
+    // 7c: lucide undefined -> manual scan still completes
+    console.log('\n--- Testing Manual Scan 4(c): lucide undefined -> manual scan still completes ---');
+    const savedLucide = window.lucide;
+    delete window.lucide;
+    window.lucide = undefined;
+
+    window.fetch = async (url) => {
+        if (url.includes('/detect')) {
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({
+                    cars: [{ box: [10, 10, 200, 200] }],
+                    plates: [{ box: [50, 50, 150, 100], text: 'DL01AB1234', status: 'ALLOWED' }]
+                })
+            };
+        }
+        return { ok: true, status: 200, json: async () => ({ status: 'ok' }) };
+    };
+
+    await assert.doesNotReject(async () => {
+        await window.manualScan();
+    }, 'manualScan() must not throw when lucide is undefined');
+
+    assert.strictEqual(manualScanBtn.disabled, false, 'Button must be enabled after scan completes with lucide undefined');
+    assert.strictEqual(manualScanBtn.innerHTML.includes('Scan Plate Now'), true, 'Button text restored with lucide undefined');
+    assert.strictEqual(statusTextElem.textContent, 'Scanned: DL01AB1234', 'Status text updated with plate text');
+
+    window.lucide = savedLucide;
+    console.log('✓ Verified 4(c): lucide undefined -> manual scan still completes without throwing');
+
     console.log('\nAll browser-level checks passed successfully!');
     dom.window.close();
     process.exit(0);
@@ -277,3 +384,4 @@ runTests().catch((err) => {
     console.error('Test failed with error:', err);
     process.exit(1);
 });
+
