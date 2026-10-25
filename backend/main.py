@@ -471,7 +471,8 @@ def clean_and_validate_plate(text, whitelist=None) -> ValidationResult:
         # (a) Check BH-Series first:
         # Format: [2 digits Year] BH [4 digits Number] [1-2 letters Series]
         # Detect BH format first and skip state-letter normalization so digits in year (e.g. 22) don't map to letters.
-        if len(cand) in (9, 10) and (cand[2:4] == "BH" or cand[2:4] == "8H"):
+        # Skip BH branch when cand[0:2] is already an Indian state code (e.g. TS8HB1801 is Telangana, not BH).
+        if len(cand) in (9, 10) and (cand[2:4] == "BH" or cand[2:4] == "8H") and cand[0:2] not in INDIAN_STATES:
             y0 = CHAR_TO_NUM.get(cand[0], cand[0])
             y1 = CHAR_TO_NUM.get(cand[1], cand[1])
             num_part = "".join(CHAR_TO_NUM.get(c, c) for c in cand[4:8])
@@ -813,6 +814,12 @@ def detect_objects(file: UploadFile = File(...)):
 
 @app.get("/health")
 def health_check():
+    return {
+        "status": "ok" if MODELS_LOADED else "degraded"
+    }
+
+@app.get("/system-info")
+def system_info():
     return {
         "status": "ok" if MODELS_LOADED else "degraded",
         "device": DEVICE,

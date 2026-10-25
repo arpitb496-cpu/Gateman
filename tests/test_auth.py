@@ -29,18 +29,36 @@ class TestAuthenticationAndSecurity:
     """Test suite covering bearer authentication, endpoints, JSON schemas, archiving, and audit trails."""
 
     def test_health_stays_open_without_token(self):
-        """GET /health must be explicitly exempt from authentication and report status and device."""
+        """GET /health must be explicitly exempt from authentication and return only status."""
         client = TestClient(app)
         res = client.get("/health")
         assert res.status_code == 200
         data = res.json()
-        assert data.get("status") in ("degraded", "ok")
+        assert data in ({"status": "degraded"}, {"status": "ok"})
+        assert "device" not in data
+        assert "platform" not in data
+        assert "models" not in data
+
+    def test_system_info_requires_authentication(self):
+        """GET /system-info requires authentication and reports device, platform, and models."""
+        client = TestClient(app)
+        # Without token -> 401
+        res_no_auth = client.get("/system-info")
+        assert res_no_auth.status_code == 401
+
+        # With token -> 200
+        res_auth = client.get("/system-info", headers={"Authorization": f"Bearer {TEST_TOKEN}"})
+        assert res_auth.status_code == 200
+        data = res_auth.json()
+        assert "status" in data
         assert "device" in data
+        assert "platform" in data
+        assert "models" in data
 
     def test_endpoint_401_with_no_token(self):
         """Accessing protected endpoints without an Authorization header must return 401."""
         client = TestClient(app)
-        for endpoint in ["/whitelist", "/logs", "/stats"]:
+        for endpoint in ["/whitelist", "/logs", "/stats", "/system-info"]:
             res = client.get(endpoint)
             assert res.status_code == 401, f"{endpoint} should return 401 when no token is provided"
             assert "detail" in res.json()
@@ -300,8 +318,13 @@ class TestAuthenticationAndSecurity:
         client = TestClient(app)
         res_h = client.get("/health")
         assert res_h.status_code == 200
-        assert res_h.json()["status"] == "degraded"
-        assert "device" in res_h.json()
+        assert res_h.json() == {"status": "degraded"}
+
+        # /system-info reports device and degraded status with auth
+        res_s = client.get("/system-info", headers={"Authorization": f"Bearer {TEST_TOKEN}"})
+        assert res_s.status_code == 200
+        assert res_s.json()["status"] == "degraded"
+        assert "device" in res_s.json()
 
         # /detect returns 503
         dummy_img = io.BytesIO(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c $.' \",#\x1c\x1c(7),01444\x1f'9=82<.342\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xbf\x00\xff\xd9")
@@ -361,16 +384,23 @@ class TestAuthenticationAndSecurity:
         """
         Dockerfile must set ENV GATEMAN_DATA_DIR=/data, VOLUME /data,
         and .dockerignore must ignore data files and model backups.
+        Root Dockerfile must copy backend/requirements.txt.
         """
         project_root = Path(backend.main.PROJECT_ROOT)
-        dockerfile = project_root / "backend" / "Dockerfile"
-        if not os.path.exists(dockerfile):
-            dockerfile = project_root / "Dockerfile"
-        assert os.path.exists(dockerfile)
-        with open(dockerfile, "r", encoding="utf-8") as f:
+        backend_dockerfile = project_root / "backend" / "Dockerfile"
+        assert os.path.exists(backend_dockerfile)
+        with open(backend_dockerfile, "r", encoding="utf-8") as f:
             df_content = f.read()
         assert "ENV GATEMAN_DATA_DIR=/data" in df_content
         assert "VOLUME /data" in df_content
+
+        root_dockerfile = project_root / "Dockerfile"
+        assert os.path.exists(root_dockerfile)
+        with open(root_dockerfile, "r", encoding="utf-8") as f:
+            root_df = f.read()
+        assert "COPY backend/requirements.txt ." in root_df
+        assert "ENV GATEMAN_DATA_DIR=/data" in root_df
+        assert "VOLUME /data" in root_df
 
         dockerignore = project_root / ".dockerignore"
         assert os.path.exists(dockerignore)
@@ -424,6 +454,8 @@ class TestAuthenticationAndSecurity:
         assert "setSystemOffline" in app_text
         assert "degraded" in app_text
         assert "503" in app_text
+        assert "system-info" in app_text
+        assert "loadSystemInfo" in app_text
 
 
 

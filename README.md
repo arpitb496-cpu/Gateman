@@ -56,6 +56,18 @@ graph TD
    export GATEMAN_ADMIN_TOKEN="your_secure_admin_token_min_16_chars"
    ```
 
+   **Data Directory & Whitelist Setup (`GATEMAN_DATA_DIR`):**  
+   All persistent data files (`whitelist.txt`, `detection_log.csv`, and `audit_log.csv`) are stored in the directory defined by `GATEMAN_DATA_DIR` (defaults to the project root; configured to `/data` with a volume in Docker):
+   ```bash
+   export GATEMAN_DATA_DIR="/path/to/data/dir"
+   ```
+   - **`whitelist.txt` is not tracked in git**: To configure authorized vehicles, copy `whitelist.example.txt` to `$GATEMAN_DATA_DIR/whitelist.txt` (or project root `whitelist.txt`) and replace the sample plates with your authorized vehicles (one per line, uppercase alphanumeric).
+   - **Missing whitelist**: If `whitelist.txt` is not found, Gateman initializes an empty whitelist file and logs a warning. A missing or empty whitelist means **nobody is authorized** (`ALLOWED` access is never granted).
+
+   **Fail-Closed Model Loading & Test Environment:**  
+   - **Fail-closed startup**: If the AI models (`yolov8s.pt`, `kbest.pt`, or EasyOCR) fail to load at startup, the server logs a fatal error and immediately exits non-zero.
+   - **`GATEMAN_ALLOW_NO_MODELS=1`**: Strictly reserved for the automated test suite so tests run instantly without downloading or running heavy neural network weights. In this mode, `/detect` returns HTTP 503 and `/health` returns `{"status": "degraded"}`. **Never set this variable in production**.
+
    **LAN & Remote Dashboard CORS Configuration:**  
    By default, CORS origins include `http://localhost:3000` and `http://127.0.0.1:3000`. If you access the sentry dashboard from another workstation or tablet on your Local Area Network (e.g. `http://192.168.1.50:3000`), you **must add your LAN dashboard origin to `CORS_ORIGINS`**:
    ```bash

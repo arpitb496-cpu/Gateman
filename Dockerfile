@@ -15,7 +15,7 @@ ENV GATEMAN_DATA_DIR=/data
 VOLUME /data
 
 # Copy requirements and install them
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all application files

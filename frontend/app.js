@@ -125,7 +125,7 @@ async function submitAuthToken() {
                 statusText.textContent = stream ? 'Optical Feed Active' : 'Ready';
             }
 
-            loadWhitelist().then(loadHistoricalLogsAndStats);
+            loadWhitelist().then(loadHistoricalLogsAndStats).then(loadSystemInfo);
 
             if (stream && (resumeScanAfterUnlock || autoScanOn)) {
                 resumeScanAfterUnlock = false;
@@ -218,6 +218,21 @@ let totalLogs        = 0;
 let activityHistory  = new Array(12).fill(0);
 let plateBuffer      = [];
 let cachedWhitelist  = new Set();
+let cachedSystemInfo = null;
+
+async function loadSystemInfo() {
+    try {
+        const r = await fetchWithAuth(`${API}/system-info`);
+        if (r.ok) {
+            cachedSystemInfo = await r.json();
+            if (cachedSystemInfo.status === 'degraded') {
+                setSystemOffline(true);
+            }
+        }
+    } catch (e) {
+        console.warn('System info notice:', e);
+    }
+}
 
 function setSystemOffline(offline) {
     isSystemOffline = Boolean(offline);
@@ -473,6 +488,7 @@ function toggleWhitelistModal() {
 
 async function loadHistoricalLogsAndStats() {
     try {
+        loadSystemInfo();
         const [statsRes, logsRes] = await Promise.all([
             fetchWithAuth(`${API}/stats`).catch(() => null),
             fetchWithAuth(`${API}/logs?limit=30`).catch(() => null)

@@ -231,3 +231,10 @@ class TestBhSeriesAndStructuralRtoParsing:
         res = clean_and_validate_plate("22BH6S17A", whitelist=set())
         assert res.plate == "22BH6517A"
         assert res.status == "UNKNOWN"
+
+    def test_ts8hb1801_not_parsed_as_bh_plate(self):
+        """TS8HB1801 has '8H' at indices 2:4, but TS is an Indian state code, so it must not be parsed as BH."""
+        res = clean_and_validate_plate("TS8HB1801", whitelist=set())
+        assert res.plate == "TS8HB1801"
+        assert "BH" not in res.plate
+        assert res.status == "UNKNOWN"
