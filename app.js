@@ -250,11 +250,14 @@ async function loadHistoricalLogsAndStats() {
                 const emptyRow = document.getElementById('log-empty-row');
                 if (emptyRow) emptyRow.remove();
 
-                data.logs.forEach(item => {
-                    const isAllowed = item.status === 'ALLOWED' || cachedWhitelist.has(item.plate);
-                    const statusBadge = isAllowed
-                        ? '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">✔ ALLOWED</span>'
-                        : '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">✘ UNKNOWN</span>';
+                    let statusBadge = '';
+                    if (item.status === 'ALLOWED') {
+                        statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">✔ ALLOWED</span>';
+                    } else if (item.status === 'NEEDS_CONFIRM') {
+                        statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/40">⚠ CONFIRM</span>';
+                    } else {
+                        statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/30">✘ UNKNOWN</span>';
+                    }
 
                     const row = document.createElement('tr');
                     row.className = 'hover:bg-slate-800/40 transition-colors text-slate-300';
@@ -666,17 +669,24 @@ function manualCloseGate() {
 
 function handleGateAccess(plateText, status) {
     const clean = plateText.trim();
-    const isAllowed = status === 'ALLOWED' || cachedWhitelist.has(clean);
     const now = Date.now();
     const lastSpoken = lastSpokenPlates.get(clean) || 0;
 
-    if (isAllowed) {
+    if (status === 'ALLOWED') {
         openBoomBarrier(clean);
         // Play chime and speak if not spoken within 7 seconds
         if (now - lastSpoken > 7000) {
             lastSpokenPlates.set(clean, now);
             playAccessGrantedChime();
             speakVoice(`Access Granted. Vehicle ${formatPlateForSpeech(clean)} authorized.`);
+        }
+    } else if (status === 'NEEDS_CONFIRM') {
+        // MUST NOT open the barrier or play the granted sound for NEEDS_CONFIRM!
+        flashRestrictedBarrier();
+        if (now - lastSpoken > 7000) {
+            lastSpokenPlates.set(clean, now);
+            playTone(480, 'triangle', 0.25); // Subtle alert for guard, NOT granted chime
+            speakVoice(`Verification needed for vehicle ${formatPlateForSpeech(clean)}. Guard please confirm.`);
         }
     } else {
         flashRestrictedBarrier();
@@ -696,6 +706,9 @@ function showStatusOverlay(status) {
     if (status === 'ALLOWED') {
         statusOverlay.innerHTML = '<span class="flex items-center gap-2"><i data-lucide="shield-check" class="w-5 h-5"></i> ACCESS GRANTED • AUTHORIZED</span>';
         statusOverlay.className = 'status-overlay allowed';
+    } else if (status === 'NEEDS_CONFIRM') {
+        statusOverlay.innerHTML = '<span class="flex items-center gap-2 text-amber-300"><i data-lucide="alert-triangle" class="w-5 h-5 text-amber-400"></i> MANUAL CHECK • CONFIRM PLATE</span>';
+        statusOverlay.className = 'status-overlay unknown';
     } else if (status === 'UNKNOWN') {
         statusOverlay.innerHTML = '<span class="flex items-center gap-2"><i data-lucide="shield-alert" class="w-5 h-5"></i> ACCESS RESTRICTED • UNKNOWN PLATE</span>';
         statusOverlay.className = 'status-overlay unknown';
@@ -833,8 +846,9 @@ function draw(d) {
         const [x1, y1, x2, y2] = p.box;
         const w = x2 - x1;
         const h = y2 - y1;
-        const isAllowed = d.status === 'ALLOWED' || cachedWhitelist.has(p.text);
-        const plateColor = p.text === '...' ? '#38bdf8' : (isAllowed ? '#10b981' : '#f59e0b');
+        const isAllowed = p.status === 'ALLOWED' || (!p.status && d.status === 'ALLOWED');
+        const isConfirm = p.status === 'NEEDS_CONFIRM' || (!p.status && d.status === 'NEEDS_CONFIRM');
+        const plateColor = p.text === '...' ? '#38bdf8' : (isAllowed ? '#10b981' : (isConfirm ? '#f59e0b' : '#ef4444'));
 
         // Glowing border
         ctx.save();
@@ -846,7 +860,7 @@ function draw(d) {
         ctx.restore();
 
         // Shaded plate crop area
-        ctx.fillStyle = isAllowed ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)';
+        ctx.fillStyle = isAllowed ? 'rgba(16, 185, 129, 0.12)' : (isConfirm ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.12)');
         ctx.fillRect(x1, y1, w, h);
 
         // Plate Header Badge
@@ -894,7 +908,7 @@ function logPlates(d) {
                 text: cleanText,
                 confidence: p.confidence || 0.9,
                 type: p.vehicle_type || 'Vehicle',
-                status: d.status || (cachedWhitelist.has(cleanText) ? 'ALLOWED' : 'UNKNOWN'),
+                status: p.status || d.status || (cachedWhitelist.has(cleanText) ? 'ALLOWED' : 'UNKNOWN'),
                 timestamp: now
             });
         }
@@ -918,10 +932,14 @@ function commitPlateToLog(p) {
     const now = new Date(p.timestamp);
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-    const isAllowed = p.status === 'ALLOWED' || cachedWhitelist.has(p.text);
-    const statusBadge = isAllowed
-        ? '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">✔ ALLOWED</span>'
-        : '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">✘ UNKNOWN</span>';
+    let statusBadge = '';
+    if (p.status === 'ALLOWED') {
+        statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">✔ ALLOWED</span>';
+    } else if (p.status === 'NEEDS_CONFIRM') {
+        statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/40">⚠ CONFIRM</span>';
+    } else {
+        statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/30">✘ UNKNOWN</span>';
+    }
 
     const row = document.createElement('tr');
     row.className = 'hover:bg-slate-800/40 transition-colors text-slate-300';

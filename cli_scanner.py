@@ -98,27 +98,30 @@ def async_ocr_worker(plate_crop, pos_key, whitelist):
 
         recognized_plate = None
         ocr_conf = 0.0
+        plate_status = "UNKNOWN"
 
         if ocr_res:
             ocr_res = cluster_ocr_lines(ocr_res)
             raw_text = " ".join([r[1] for r in ocr_res])
             conf_avg = sum([r[2] for r in ocr_res]) / len(ocr_res)
             
-            validated = clean_and_validate_plate(raw_text, whitelist)
-            if validated and conf_avg >= 0.40:
-                recognized_plate = validated
+            val_res = clean_and_validate_plate(raw_text, whitelist)
+            if val_res and val_res.plate and conf_avg >= 0.40:
+                recognized_plate = val_res.plate
+                plate_status = val_res.status
                 ocr_conf = conf_avg
 
         if not recognized_plate:
             raw_ocr = reader.readtext(plate_crop, detail=0)
             if raw_ocr:
-                val = clean_and_validate_plate("".join(raw_ocr), whitelist)
-                if val:
-                    recognized_plate = val
+                val_res = clean_and_validate_plate("".join(raw_ocr), whitelist)
+                if val_res and val_res.plate:
+                    recognized_plate = val_res.plate
+                    plate_status = val_res.status
                     ocr_conf = 0.70
 
         if recognized_plate:
-            status = "ALLOWED" if recognized_plate in whitelist else "UNKNOWN"
+            status = plate_status
             plate_cache[pos_key] = (recognized_plate, status, ocr_conf, time.time())
             log_plate_to_db(recognized_plate, status)
         else:

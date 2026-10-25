@@ -178,82 +178,143 @@ def get_levenshtein(s1, s2):
         previous_row = current_row
     return previous_row[-1]
 
-def clean_and_validate_plate(text, whitelist=None):
-    """
-    High-Precision Indian License Plate Validator & Auto-Correction:
-    - Filters out noise, labels, posters, and short random text.
-    - Strips state header words (HARYANA, MAHARASHTRA, DELHI, IND).
-    - Normalizes positional character confusions (e.g. MP2O -> MP20, Z in tail -> 2).
-    - Strictly enforces Indian RTO syntax: [2 letters State] [1-2 digits RTO] [1-3 letters Series] [3-4 digits Number].
-    - Fuzzy matches (1 edit distance) against the whitelist to prevent gate lockouts from minor OCR glare.
-    """
-    raw = re.sub(r'[^A-Z0-9]', '', text.upper())
-    
-    # 0. Direct whitelist match
-    if whitelist and raw in whitelist:
-        return raw
+from typing import NamedTuple, Optional, Iterable
 
-    # 1. Fuzzy whitelist match (if 1 character typo away from an authorized plate)
+class ValidationResult(NamedTuple):
+    plate: Optional[str] = None
+    status: Optional[str] = None
+
+    def __bool__(self):
+        return self.plate is not None
+
+    def __eq__(self, other):
+        if isinstance(other, str):
+            return self.plate == other
+        return tuple.__eq__(self, other)
+
+OCR_CONFUSIONS = {
+    ('0', 'O'), ('O', '0'),
+    ('0', 'Q'), ('Q', '0'),
+    ('1', 'I'), ('I', '1'),
+    ('1', 'L'), ('L', '1'),
+    ('2', 'Z'), ('Z', '2'),
+    ('5', 'S'), ('S', '5'),
+    ('6', 'G'), ('G', '6'),
+    ('8', 'B'), ('B', '8'),
+}
+
+def is_ocr_fuzzy_match(candidate: str, target: str) -> bool:
+    """
+    Returns True iff candidate and target are of the exact same length,
+    differ by at least 1 character, and EVERY differing character pair
+    (candidate[i], target[i]) is a known OCR confusion pair.
+    No insertions or deletions are allowed.
+    """
+    if len(candidate) != len(target):
+        return False
+    if candidate == target:
+        return False
+    diff_count = 0
+    for c1, c2 in zip(candidate, target):
+        if c1 != c2:
+            if (c1, c2) not in OCR_CONFUSIONS:
+                return False
+            diff_count += 1
+    return diff_count > 0
+
+def clean_and_validate_plate(text, whitelist=None) -> ValidationResult:
+    """
+    High-Precision Indian License Plate Validator & OCR Correction:
+    - Exact match against whitelist -> status: ALLOWED
+    - Fuzzy matching applies ONLY to strings of the exact same length where
+      EVERY differing character pair is a known OCR confusion pair (0/O, 0/Q, 1/I, 1/L, 2/Z, 5/S, 6/G, 8/B).
+      No insertions or deletions allowed.
+    - If exactly one whitelist plate matches fuzzy criteria -> status: NEEDS_CONFIRM (corrected plate returned)
+    - If more than one whitelist plate matches -> return no match (ambiguous).
+    - If valid Indian plate format (RTO or BH series) not in whitelist -> status: UNKNOWN
+    - If not a valid plate -> ValidationResult(None, None)
+    """
+    if not text:
+        return ValidationResult(None, None)
+
+    raw = re.sub(r'[^A-Z0-9]', '', str(text).upper())
+    if not raw:
+        return ValidationResult(None, None)
+
+    # Clean whitelist plates
+    clean_wl = set()
     if whitelist:
-        for wl_plate in whitelist:
-            if get_levenshtein(raw, wl_plate) <= 1:
-                return wl_plate
+        for p in whitelist:
+            wp = re.sub(r'[^A-Z0-9]', '', str(p).upper())
+            if wp:
+                clean_wl.add(wp)
 
-    # Strip printed state name headers if present
+    # Candidate strings to evaluate (raw, and stripped of state headers or 'IND' stamps)
+    candidates = [raw]
     for word in COMMON_PREFIX_WORDS:
         if raw.startswith(word) and len(raw) >= len(word) + 7:
-            raw = raw[len(word):]
+            candidates.append(raw[len(word):])
             break
-
-    # Strip leading 'IND' stamp if attached
     if raw.startswith("IND") and len(raw) >= 9:
-        raw = raw[3:]
+        candidates.append(raw[3:])
 
-    # Plates must be between 7 and 11 characters
-    if len(raw) < 7 or len(raw) > 11:
-        return None
+    # 1. Exact match against whitelist = ALLOWED
+    if clean_wl:
+        for cand in candidates:
+            if cand in clean_wl:
+                return ValidationResult(cand, "ALLOWED")
 
-    # Positional character grammar normalization
-    chars = list(raw)
-    n = len(chars)
+    # 2. Fuzzy matching against whitelist:
+    # - Same length only (no insertions or deletions)
+    # - Every differing character pair must be a known OCR confusion
+    # - If more than one whitelist plate matches, return no match
+    # - A fuzzy-corrected read returns status NEEDS_CONFIRM, not ALLOWED
+    if clean_wl:
+        for cand in candidates:
+            fuzzy_matches = [wp for wp in clean_wl if is_ocr_fuzzy_match(cand, wp)]
+            if len(fuzzy_matches) == 1:
+                return ValidationResult(fuzzy_matches[0], "NEEDS_CONFIRM")
+            elif len(fuzzy_matches) > 1:
+                # Ambiguous: multiple whitelist plates match -> return no match
+                break
 
-    # Positions 0 & 1: ALWAYS State letters (e.g. 0L -> DL, 1R -> HR)
-    chars[0] = NUM_TO_CHAR.get(chars[0], chars[0])
-    chars[1] = NUM_TO_CHAR.get(chars[1], chars[1])
+    # 3. Generic Plate Validation (Format check for unregistered/unknown vehicles)
+    for cand in candidates:
+        if len(cand) < 7 or len(cand) > 11:
+            continue
 
-    # Position 2: ALWAYS District first digit (e.g. MPO -> MP0, DL3)
-    chars[2] = CHAR_TO_NUM.get(chars[2], chars[2])
+        chars = list(cand)
+        n = len(chars)
 
-    # Position 3: If followed by series letters, Position 3 is also District digit (e.g. MP2O -> MP20, MH2O -> MH20)
-    if n >= 9 and chars[3] in ['O', 'Q', 'D', 'I', 'Z', 'B', 'S']:
-        chars[3] = CHAR_TO_NUM.get(chars[3], chars[3])
+        # Positions 0 & 1: State letters
+        chars[0] = NUM_TO_CHAR.get(chars[0], chars[0])
+        chars[1] = NUM_TO_CHAR.get(chars[1], chars[1])
 
-    # Last 3 to 4 characters: ALWAYS Numbers (e.g. Z116 -> 2116, O -> 0, I -> 1)
-    tail_len = 4 if n >= 9 else 3
-    for i in range(n - tail_len, n):
-        chars[i] = CHAR_TO_NUM.get(chars[i], chars[i])
+        # Position 2: District digit
+        chars[2] = CHAR_TO_NUM.get(chars[2], chars[2])
 
-    fixed_text = ''.join(chars)
+        # Position 3: District digit if followed by series
+        if n >= 9 and chars[3] in ['O', 'Q', 'D', 'I', 'Z', 'B', 'S']:
+            chars[3] = CHAR_TO_NUM.get(chars[3], chars[3])
 
-    # Fuzzy whitelist re-check after character normalization
-    if whitelist:
-        for wl_plate in whitelist:
-            if get_levenshtein(fixed_text, wl_plate) <= 1:
-                return wl_plate
+        # Tail characters: Numbers
+        tail_len = 4 if n >= 9 else 3
+        for i in range(n - tail_len, n):
+            chars[i] = CHAR_TO_NUM.get(chars[i], chars[i])
 
-    # 1. Standard Indian Plate Match:
-    # State (2 letters) + RTO (1-2 digits) + Series (1-3 letters) + Number (3-4 digits)
-    m = re.match(r'^([A-Z]{2})([0-9]{1,2})([A-Z]{1,3})([0-9]{3,4})$', fixed_text)
-    if m and m.group(1) in INDIAN_STATES:
-        return fixed_text
+        fixed_text = ''.join(chars)
 
-    # 2. BH Series Plate Match:
-    # Year (2 digits) + BH + Number (4 digits) + Series (1-2 letters)
-    bh = re.match(r'^([0-9]{2})BH([0-9]{4})([A-Z]{1,2})$', fixed_text)
-    if bh:
-        return fixed_text
+        # Standard Indian RTO format
+        m = re.match(r'^([A-Z]{2})([0-9]{1,2})([A-Z]{1,3})([0-9]{3,4})$', fixed_text)
+        if m and m.group(1) in INDIAN_STATES:
+            return ValidationResult(fixed_text, "UNKNOWN")
 
-    return None
+        # BH Series
+        bh = re.match(r'^([0-9]{2})BH([0-9]{4})([A-Z]{1,2})$', fixed_text)
+        if bh:
+            return ValidationResult(fixed_text, "UNKNOWN")
+
+    return ValidationResult(None, None)
 
 def cluster_ocr_lines(ocr_res):
     """
@@ -435,6 +496,7 @@ def detect_objects(file: UploadFile = File(...)):
         ocr_res = reader.readtext(proc_crop, detail=1, paragraph=False, low_text=0.2)
 
         recognized_text = "..."
+        plate_status = "UNKNOWN"
         ocr_conf = 0.0
 
         if ocr_res:
@@ -442,18 +504,20 @@ def detect_objects(file: UploadFile = File(...)):
             raw_text = " ".join([r[1] for r in ocr_res])
             conf_sum = sum([r[2] for r in ocr_res]) / len(ocr_res)
             
-            validated = clean_and_validate_plate(raw_text, whitelist)
-            if validated and conf_sum >= 0.35:
-                recognized_text = validated
+            val_res = clean_and_validate_plate(raw_text, whitelist)
+            if val_res and val_res.plate and conf_sum >= 0.35:
+                recognized_text = val_res.plate
+                plate_status = val_res.status
                 ocr_conf = conf_sum
 
         # Robust Fallback: If enhanced grayscale didn't produce a valid plate, try raw crop
         if recognized_text == "...":
             raw_ocr = reader.readtext(plate_crop, detail=0)
             if raw_ocr:
-                val = clean_and_validate_plate("".join(raw_ocr), whitelist)
-                if val:
-                    recognized_text = val
+                val_res = clean_and_validate_plate("".join(raw_ocr), whitelist)
+                if val_res and val_res.plate:
+                    recognized_text = val_res.plate
+                    plate_status = val_res.status
                     ocr_conf = 0.70
 
         # Only register plate if recognized or if YOLO plate detector is confident (>0.40)
@@ -462,7 +526,8 @@ def detect_objects(file: UploadFile = File(...)):
                 "box": [px1, py1, px2, py2],
                 "text": recognized_text,
                 "confidence": round(float(ocr_conf if recognized_text != "..." else pconf), 2),
-                "vehicle_type": vtype
+                "vehicle_type": vtype,
+                "status": plate_status
             })
 
     # 4. Check whitelist for status and log valid reads
@@ -470,7 +535,7 @@ def detect_objects(file: UploadFile = File(...)):
         plate_str = plate["text"]
         if plate_str != "...":
             clean_str = re.sub(r'[^A-Z0-9]', '', plate_str.upper())
-            status = "ALLOWED" if clean_str in whitelist else "UNKNOWN"
+            status = plate.get("status") or ("ALLOWED" if clean_str in whitelist else "UNKNOWN")
             global_status = status
             log_plate_to_db(clean_str, status)
             break
