@@ -299,10 +299,21 @@ document.addEventListener('mouseleave', () => { mouse.x = null; mouse.y = null; 
 
 // ─── Particle Constellation ──────────────────────────────────
 let particles = [];
+let particleAnimId = null;
 const colors = ['#3b82f6', '#10b981', '#6366f1', '#ec4899', '#06b6d4'];
 
+function shouldRunParticles() {
+    if (!pCanvas || !pCtx) return false;
+    if (window.innerWidth < 768) return false;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
+    return true;
+}
+
 function initParticles() {
-    if (!pCanvas || !pCtx) return;
+    if (!pCanvas || !pCtx || !shouldRunParticles()) {
+        particles = [];
+        return;
+    }
     particles = [];
     const width  = pCanvas.width  = window.innerWidth;
     const height = pCanvas.height = window.innerHeight;
@@ -322,8 +333,29 @@ function initParticles() {
     }
 }
 
+function updateParticleAnimation() {
+    if (shouldRunParticles()) {
+        if (!particleAnimId) {
+            initParticles();
+            particleAnimId = requestAnimationFrame(animateParticles);
+        }
+    } else {
+        if (particleAnimId) {
+            cancelAnimationFrame(particleAnimId);
+            particleAnimId = null;
+        }
+        if (pCanvas && pCtx) {
+            pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
+        }
+    }
+}
+
 function animateParticles() {
-    if (!pCanvas || !pCtx) return;
+    if (!shouldRunParticles()) {
+        particleAnimId = null;
+        if (pCanvas && pCtx) pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
+        return;
+    }
     pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
     for (let p of particles) {
         p.x += p.vx; p.y += p.vy;
@@ -337,13 +369,24 @@ function animateParticles() {
         pCtx.fillStyle = p.color;
         pCtx.fill();
     }
-    requestAnimationFrame(animateParticles);
+    particleAnimId = requestAnimationFrame(animateParticles);
 }
 
 if (pCanvas) {
-    window.addEventListener('resize', initParticles);
-    initParticles();
-    animateParticles();
+    window.addEventListener('resize', () => {
+        if (shouldRunParticles()) {
+            initParticles();
+        }
+        updateParticleAnimation();
+    });
+    if (window.matchMedia) {
+        try {
+            window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', updateParticleAnimation);
+        } catch (e) {
+            // older browsers
+        }
+    }
+    updateParticleAnimation();
 }
 
 // ─── Server Health Ping ───────────────────────────────────────
@@ -395,7 +438,7 @@ function renderWhitelistChips(list) {
     container.innerHTML = list.map(p => `
         <span class="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-lg text-xs font-mono font-bold group">
             <span>${p}</span>
-            <button onclick="removePlate('${p}')" class="text-emerald-500/60 hover:text-rose-400 hover:bg-rose-500/20 rounded px-1 transition-colors ml-0.5" title="Remove from whitelist">×</button>
+            <button onclick="removePlate('${p}')" class="touch-target inline-flex items-center justify-center text-rose-400/80 hover:text-rose-300 active:text-rose-200 hover:bg-rose-500/20 rounded-md px-2 text-sm font-bold transition-colors ml-1 cursor-pointer" title="Remove ${p} from whitelist" aria-label="Remove ${p}">×</button>
         </span>
     `).join('');
 }
@@ -469,6 +512,7 @@ function toggleWhitelistModal() {
     modal.classList.toggle('hidden');
     if (!modal.classList.contains('hidden')) {
         loadWhitelist();
+        if (window.lucide) lucide.createIcons();
     }
 }
 
@@ -1417,6 +1461,10 @@ function measureVideoFps() {
         lastFpsTime = now;
         if (liveFps) {
             liveFps.textContent = `${actualFps} FPS`;
+        }
+        const fpsMetricEl = document.getElementById('live-fps-metric');
+        if (fpsMetricEl) {
+            fpsMetricEl.textContent = `${actualFps} FPS`;
         }
     }
     requestAnimationFrame(measureVideoFps);

@@ -616,35 +616,60 @@ body:hover .cursor-glow {
 /* --- Allowed/Unknown Status Banner --- */
 .status-overlay {
     position: absolute;
-    bottom: 0;
-    left: 0;
-    width: 100%;
-    padding: 1rem;
-    text-align: center;
-    font-size: 1.35rem;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%) translateY(120%);
+    padding: 0.5rem 1.25rem;
+    border-radius: 9999px;
+    font-size: clamp(0.75rem, 3.2vw, 0.95rem);
     font-weight: 800;
-    letter-spacing: 0.1em;
-    backdrop-filter: blur(12px);
-    transition: var(--transition-smooth);
-    transform: translateY(100%);
+    letter-spacing: 0.05em;
+    backdrop-filter: blur(16px);
+    transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
     opacity: 0;
-    z-index: 10;
-    box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.05);
+    pointer-events: none;
+    z-index: 30;
+    text-align: center;
+    max-width: 92%;
+    word-break: break-word;
 }
 .status-overlay.allowed {
-    background: rgba(19, 115, 51, 0.92);
-    color: #ffffff;
-    transform: translateY(0);
+    transform: translateX(-50%) translateY(0);
     opacity: 1;
+    background: rgba(16, 185, 129, 0.92);
+    color: #ffffff;
+    box-shadow: 0 0 35px rgba(16, 185, 129, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.4);
 }
 .status-overlay.unknown {
-    background: rgba(217, 48, 37, 0.92);
-    color: #ffffff;
-    transform: translateY(0);
+    transform: translateX(-50%) translateY(0);
     opacity: 1;
-    animation: alertPulse 1.5s infinite ease-in-out;
+    background: rgba(239, 68, 68, 0.92);
+    color: #ffffff;
+    box-shadow: 0 0 35px rgba(239, 68, 68, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.4);
 }
-@keyframes alertPulse {
-    0%, 100% { opacity: 0.95; }
-    50% { opacity: 0.8; }
+
+/* Responsive accessibility: turn off canvas animation on mobile */
+@media (max-width: 767px) {
+    #particle-canvas, .cursor-glow {
+        display: none !important;
+    }
+}
+
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+    }
+    #particle-canvas, .cursor-glow {
+        display: none !important;
+    }
+}
+
+/* Standard 44px touch targets */
+.touch-target {
+    min-height: 44px;
+    min-width: 44px;
 }
