@@ -27,4 +27,5 @@ detection_log.csv
 detection_log_*.csv
 detection_log.txt
 audit_log.csv
-
+# Dependencies
+node_modules/

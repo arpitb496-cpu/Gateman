@@ -210,6 +210,7 @@ let stream           = null;
 let autoScanLoop     = null;
 let busy             = false;
 let autoScanOn       = false;
+let autoScanTimer    = null;
 let isSystemOffline  = false;
 let statusTimer      = null;
 let totalVehicles    = 0;
@@ -535,13 +536,6 @@ async function loadHistoricalLogsAndStats() {
     }
 }
 
-// Initial authorization check
-if (!getAuthToken()) {
-    lockDashboard('LOCKED - enter token');
-} else {
-    loadWhitelist().then(loadHistoricalLogsAndStats);
-}
-
 // ─── Reset Counters and Clear Detection Logs ───────────────────
 async function clearDetectionLogs() {
     if (!confirm('Are you sure you want to reset all vehicle counters and clear the detection log history to 0?')) {
@@ -639,8 +633,6 @@ async function exportExcel() {
 })();
 
 // ─── Continuous High-Speed Auto-Scan ─────────────────────────
-let autoScanTimer = null;
-
 function triggerNextScan() {
     if (!autoScanOn || !stream || isDashboardLocked || isSystemOffline || !getAuthToken()) return;
     if (autoScanTimer) clearTimeout(autoScanTimer);
@@ -1321,3 +1313,10 @@ function measureVideoFps() {
 requestAnimationFrame(measureVideoFps);
 
 setInterval(updateActivityGraph, 5000);
+
+// ─── Initial Authorization Check ──────────────────────────────
+if (!getAuthToken()) {
+    lockDashboard('LOCKED - enter token');
+} else {
+    loadWhitelist().then(loadHistoricalLogsAndStats).then(loadSystemInfo);
+}

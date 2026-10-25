@@ -1,0 +1,12 @@
+{
+  "name": "gateman-frontend",
+  "version": "1.0.0",
+  "description": "Browser and frontend tests for AI Gateman dashboard",
+  "scripts": {
+    "test": "node tests/test_browser.js",
+    "check": "node --check frontend/app.js && node --check app.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.3"
+  }
+}
