@@ -1,3 +1,6 @@
+import os
+os.environ.setdefault("GATEMAN_ADMIN_TOKEN", "gateman_test_admin_token_32chars")
+
 import pytest
 from starlette.testclient import TestClient
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,6 +33,7 @@ class TestCorsConfiguration:
         middleware = cors_middlewares[0]
         allow_origins = middleware.kwargs.get("allow_origins", [])
         assert "http://localhost:3000" in allow_origins
+        assert middleware.kwargs.get("allow_credentials") is False
 
     def test_cors_request_from_localhost_3000(self):
         """A cross-origin request from http://localhost:3000 must receive CORS approval."""
@@ -37,21 +41,24 @@ class TestCorsConfiguration:
         res = client.get("/health", headers={"Origin": "http://localhost:3000"})
         assert res.status_code == 200
         assert res.headers.get("access-control-allow-origin") == "http://localhost:3000"
-        assert res.headers.get("access-control-allow-credentials") == "true"
+        # allow_credentials must be False
+        assert res.headers.get("access-control-allow-credentials") is None
 
     def test_cors_preflight_options_localhost_3000(self):
-        """Preflight OPTIONS request from http://localhost:3000 must allow the method."""
+        """Preflight OPTIONS request from http://localhost:3000 must allow the method and Authorization header."""
         client = TestClient(app)
         res = client.options(
             "/api/validate-plate",
             headers={
                 "Origin": "http://localhost:3000",
                 "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "Content-Type",
+                "Access-Control-Request-Headers": "Authorization, Content-Type",
             },
         )
         assert res.status_code == 200
         assert res.headers.get("access-control-allow-origin") == "http://localhost:3000"
+        allow_headers = res.headers.get("access-control-allow-headers", "").lower()
+        assert "authorization" in allow_headers or "*" in allow_headers
 
     def test_cors_request_from_127_0_0_1_3000(self):
         """Requests from http://127.0.0.1:3000 must also be allowed."""

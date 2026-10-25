@@ -3,12 +3,17 @@ import io
 import csv
 import re
 import time
+import shutil
+import tempfile
+import hmac
 import threading
 from datetime import datetime
+from typing import Optional, Iterable
+from contextlib import asynccontextmanager
 from PIL import Image
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, status
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import openpyxl
@@ -42,10 +47,25 @@ def find_file(filename):
 
 WHITELIST_FILE = find_file("whitelist.txt")
 LOG_FILE = find_file("detection_log.csv")
+AUDIT_LOG_FILE = find_file("audit_log.csv")
 CAR_MODEL_PATH = find_file("yolov8s.pt") if os.path.exists(find_file("yolov8s.pt")) else find_file("yolov8n.pt")
 PLATE_MODEL_PATH = find_file("kbest.pt")
 
-app = FastAPI(title="Automatic Gateman API - Apple Silicon GPU Accelerated")
+def get_admin_token() -> str:
+    token = os.environ.get("GATEMAN_ADMIN_TOKEN", "")
+    if not token or len(token) < 16:
+        raise RuntimeError("GATEMAN_ADMIN_TOKEN environment variable must be set and at least 16 characters long.")
+    return token
+
+# Validate token on module load / startup
+get_admin_token()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    get_admin_token()
+    yield
+
+app = FastAPI(title="Automatic Gateman API - Apple Silicon GPU Accelerated", lifespan=lifespan)
 
 # CORS setup (W3C compliant)
 # The dashboard is served from port 3000 and calls the API on port 8000, so the default CORS origin list must include http://localhost:3000
@@ -62,35 +82,117 @@ if cors_origins_env:
     CORS_ORIGINS = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
     if "http://localhost:3000" not in CORS_ORIGINS:
         CORS_ORIGINS.append("http://localhost:3000")
+    if "http://127.0.0.1:3000" not in CORS_ORIGINS:
+        CORS_ORIGINS.append("http://127.0.0.1:3000")
 else:
     CORS_ORIGINS = list(DEFAULT_CORS_ORIGINS)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "*"],
 )
+
+@app.middleware("http")
+async def require_auth_token(request: Request, call_next):
+    # Allow preflight CORS OPTIONS requests through
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    # GET /health is explicitly exempt from authentication
+    if request.url.path.rstrip("/") == "/health" and request.method == "GET":
+        return await call_next(request)
+
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": "Invalid or missing authentication token"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = auth_header[7:].strip()
+    try:
+        admin_token = get_admin_token()
+    except Exception as e:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": str(e)},
+        )
+
+    if not hmac.compare_digest(token, admin_token):
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": "Invalid or missing authentication token"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return await call_next(request)
+
+_whitelist_lock = threading.RLock()
+_audit_lock = threading.Lock()
+_csv_lock = threading.Lock()
+
+class WhitelistPlateRequest(BaseModel):
+    plate: str
+
+def get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "127.0.0.1"
+
+def log_audit(action: str, detail: str, client_ip: str = "127.0.0.1") -> None:
+    timestamp = datetime.now().isoformat()
+    with _audit_lock:
+        needs_header = not os.path.exists(AUDIT_LOG_FILE) or os.path.getsize(AUDIT_LOG_FILE) == 0
+        with open(AUDIT_LOG_FILE, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            if needs_header:
+                writer.writerow(["timestamp", "action", "detail", "client_ip"])
+            writer.writerow([timestamp, action, detail, client_ip])
+
+def save_whitelist_atomic(plates: Iterable[str]) -> None:
+    """Atomically writes sorted unique whitelist plates using temp file + os.replace under lock."""
+    with _whitelist_lock:
+        dir_name = os.path.dirname(os.path.abspath(WHITELIST_FILE))
+        fd, temp_path = tempfile.mkstemp(dir=dir_name, prefix="whitelist_", suffix=".tmp", text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                for p in sorted(list(set(plates))):
+                    f.write(f"{p}\n")
+            os.replace(temp_path, WHITELIST_FILE)
+        except Exception:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            raise
 
 def init_whitelist():
     """Initializes the whitelist file with default allowed plates if not present."""
-    if not os.path.exists(WHITELIST_FILE):
-        with open(WHITELIST_FILE, "w", encoding="utf-8") as f:
-            f.write("22BH6517A\nMP20CC1234\nDL3CAQ0001\nMH12AB1234\nMH20DV2366\n")
+    with _whitelist_lock:
+        if not os.path.exists(WHITELIST_FILE):
+            save_whitelist_atomic(["22BH6517A", "MP20CC1234", "DL3CAQ0001", "MH12AB1234", "MH20DV2366"])
 
 def get_whitelist():
     """Reads whitelisted plate numbers."""
     init_whitelist()
     plates = set()
-    try:
-        with open(WHITELIST_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                p = re.sub(r'[^A-Z0-9]', '', line.strip().upper())
-                if p:
-                    plates.add(p)
-    except Exception as e:
-        print(f"Error reading whitelist: {e}")
+    with _whitelist_lock:
+        try:
+            with open(WHITELIST_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    p = re.sub(r'[^A-Z0-9]', '', line.strip().upper())
+                    if p:
+                        plates.add(p)
+        except Exception as e:
+            print(f"Error reading whitelist: {e}")
     return plates
 
 _last_logged_plates = {}
@@ -666,30 +768,32 @@ def get_whitelist_api():
     return {"whitelist": sorted(list(get_whitelist()))}
 
 @app.post("/whitelist/add")
-def add_to_whitelist(plate: str):
-    clean = re.sub(r'[^A-Z0-9]', '', plate.upper())
+def add_to_whitelist(payload: WhitelistPlateRequest, request: Request):
+    clean = re.sub(r'[^A-Z0-9]', '', payload.plate.upper())
     if not clean:
         raise HTTPException(status_code=400, detail="Invalid plate number")
-    wl = get_whitelist()
-    if clean not in wl:
-        wl.add(clean)
-        with open(WHITELIST_FILE, "w", encoding="utf-8") as f:
-            for p in sorted(list(wl)):
-                f.write(f"{p}\n")
+    client_ip = get_client_ip(request)
+    with _whitelist_lock:
+        wl = get_whitelist()
+        if clean not in wl:
+            wl.add(clean)
+            save_whitelist_atomic(wl)
+    log_audit("whitelist_add", clean, client_ip)
     return {"status": "added", "plate": clean}
 
 @app.post("/whitelist/remove")
-def remove_from_whitelist(plate: str):
-    clean = re.sub(r'[^A-Z0-9]', '', plate.upper())
+def remove_from_whitelist(payload: WhitelistPlateRequest, request: Request):
+    clean = re.sub(r'[^A-Z0-9]', '', payload.plate.upper())
     if not clean:
         raise HTTPException(status_code=400, detail="Invalid plate number")
-    wl = get_whitelist()
-    if clean in wl:
-        wl.remove(clean)
-        with open(WHITELIST_FILE, "w", encoding="utf-8") as f:
-            for p in sorted(list(wl)):
-                f.write(f"{p}\n")
-        return {"status": "removed", "plate": clean}
+    client_ip = get_client_ip(request)
+    with _whitelist_lock:
+        wl = get_whitelist()
+        if clean in wl:
+            wl.remove(clean)
+            save_whitelist_atomic(wl)
+            log_audit("whitelist_remove", clean, client_ip)
+            return {"status": "removed", "plate": clean}
     return {"status": "not_found", "plate": clean}
 
 @app.get("/logs")
@@ -715,16 +819,31 @@ def get_logs(limit: int = 50):
     return {"logs": rows[-limit:][::-1]}
 
 @app.post("/clear-logs")
-def clear_logs():
-    """Clears detection log CSV file and in-memory cooldown cache, resetting all counters to 0."""
+def clear_logs(request: Request):
+    """Archives detection_log.csv to a timestamped file before resetting it, logging to audit trail."""
     global _last_logged_plates
+    client_ip = get_client_ip(request)
     with _csv_lock:
+        archive_filename = ""
         try:
+            if os.path.exists(LOG_FILE):
+                dir_name = os.path.dirname(os.path.abspath(LOG_FILE))
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                archive_filename = f"detection_log_{timestamp}.csv"
+                archive_path = os.path.join(dir_name, archive_filename)
+                shutil.copy2(LOG_FILE, archive_path)
+
             with open(LOG_FILE, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(["Date", "Time", "Plate Number", "Status"])
             _last_logged_plates.clear()
-            return {"status": "success", "message": "Detection logs cleared"}
+
+            log_audit("clear_logs", archive_filename or "reset_empty", client_ip)
+            return {
+                "status": "success",
+                "message": "Detection logs cleared",
+                "archive": archive_filename
+            }
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 

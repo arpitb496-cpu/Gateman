@@ -50,18 +50,30 @@ graph TD
    pip install fastapi uvicorn ultralytics easyocr opencv-python pillow python-multipart openpyxl dill requests
    ```
 
-4. **Start the AI Backend Server**
+4. **Configure Environment Variables & Authentication**
+   The backend enforces Bearer token authentication on all protected endpoints (refusing to start if `GATEMAN_ADMIN_TOKEN` is unset or shorter than 16 characters):
+   ```bash
+   export GATEMAN_ADMIN_TOKEN="your_secure_admin_token_min_16_chars"
+   ```
+
+   **LAN & Remote Dashboard CORS Configuration:**  
+   By default, CORS origins include `http://localhost:3000` and `http://127.0.0.1:3000`. If you access the sentry dashboard from another workstation or tablet on your Local Area Network (e.g. `http://192.168.1.50:3000`), you **must add your LAN dashboard origin to `CORS_ORIGINS`**:
+   ```bash
+   export CORS_ORIGINS="http://192.168.1.50:3000,http://localhost:3000,http://127.0.0.1:3000"
+   ```
+
+5. **Start the AI Backend Server**
    ```bash
    python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
    ```
 
-5. **Start the Frontend Dashboard**
+6. **Start the Frontend Dashboard**
    ```bash
    python serve.py
    ```
 
-6. **View the Application**
-   Open your browser and navigate to `http://localhost:3000`. Select your webcam from the dropdown and click "Start" to begin live detection!
+7. **View the Application**
+   Open your browser and navigate to `http://localhost:3000`. Enter your `GATEMAN_ADMIN_TOKEN` when prompted by the sentry dashboard, select your camera, and click "Start" to begin optical ANPR detection!
 
 ### Future Roadmap
 * **Database Migration**: Transition from flat CSV logging to a robust SQL database (e.g., PostgreSQL) for advanced querying and analytics.

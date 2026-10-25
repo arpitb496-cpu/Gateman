@@ -1,3 +1,6 @@
+import os
+os.environ.setdefault("GATEMAN_ADMIN_TOKEN", "gateman_test_admin_token_32chars")
+
 import pytest
 from backend.main import clean_and_validate_plate, is_ocr_fuzzy_match, OCR_CONFUSIONS
 

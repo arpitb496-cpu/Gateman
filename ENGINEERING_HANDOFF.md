@@ -88,8 +88,14 @@ A key design consideration is whether the system should run purely on a Raspberr
    - Web Audio API synthesizes a harmonious two-tone major chord for authorized vehicles and a low dual-frequency buzzer for unauthorized attempts.
    - Web Speech API announces vehicular status (`"Access Granted. Vehicle [Spelled Plate] authorized."`).
 3. **Report Exporter & Data Management:**
-   - `/export-excel` generates formatted, color-coded `.xlsx` reports via `openpyxl`.
-   - `/clear-logs` endpoint and a dashboard **[ 🗑️ Reset / Clear ]** button allow operators to flush `detection_log.csv` and reset counters to zero.
+   - `/export-excel` generates formatted, color-coded `.xlsx` reports via `openpyxl` using authorized blob download.
+   - `/clear-logs` endpoint archives `detection_log.csv` to a timestamped file (`detection_log_YYYYMMDD_HHMMSS_ffffff.csv`) before flushing the log and resetting counters to zero.
+   - Append-only `audit_log.csv` tracks every whitelist modification (add/remove) and log clearing event with timestamp, action, detail, and client IP.
+4. **Perimeter Authentication & Integrity:**
+   - **Mandatory Bearer Token:** Protected by `GATEMAN_ADMIN_TOKEN` (>= 16 characters required at startup; compared with `hmac.compare_digest`).
+   - `GET /health` is the only open endpoint (no authentication required).
+   - **Atomic Whitelist Persistence:** Modifications to `whitelist.txt` execute atomically via temporary files + `os.replace` guarded by `threading.RLock()`.
+   - **Strict JSON Payloads:** `/whitelist/add` and `/whitelist/remove` require JSON body `{"plate": "..."}` validated with Pydantic.
 
 ---
 
@@ -103,6 +109,7 @@ A key design consideration is whether the system should run purely on a Raspberr
 | [`cli_scanner.py`](file:///Users/arpitbhardwaj/My_Creations/Gateman-main/cli_scanner.py) | Standalone headless / OpenCV terminal scanner with async `ThreadPoolExecutor` and spatial caching. |
 | [`whitelist.txt`](file:///Users/arpitbhardwaj/My_Creations/Gateman-main/whitelist.txt) | Primary vehicle whitelist file containing authorized plate numbers. |
 | [`detection_log.csv`](file:///Users/arpitbhardwaj/My_Creations/Gateman-main/detection_log.csv) | Local CSV persistence for all scans (`Date,Time,Plate Number,Status`). |
+| [`audit_log.csv`](file:///Users/arpitbhardwaj/My_Creations/Gateman-main/audit_log.csv) | Immutable append-only audit trail for administrative actions (`timestamp,action,detail,client_ip`). |
 | [`serve.py`](file:///Users/arpitbhardwaj/My_Creations/Gateman-main/serve.py) | Lightweight HTTP static file server hosting the frontend on port 3000. |
 
 > [!NOTE]

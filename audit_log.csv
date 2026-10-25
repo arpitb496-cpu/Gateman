@@ -1,0 +1,15 @@
+timestamp,action,detail,client_ip
+2026-10-25T14:17:13.801952,whitelist_add,DL9CAF9999,testclient
+2026-10-25T14:17:13.806098,whitelist_remove,DL9CAF9999,testclient
+2026-10-25T14:17:13.811289,clear_logs,detection_log_20261025_141713_810851.csv,testclient
+2026-10-25T14:17:13.814350,whitelist_add,UP14TEST0001,testclient
+2026-10-25T14:17:13.816308,whitelist_remove,UP14TEST0001,testclient
+2026-10-25T14:17:13.818158,clear_logs,detection_log_20261025_141713_817801.csv,testclient
+2026-10-25T14:22:21.752080,whitelist_add,TESTLIVE123,127.0.0.1
+2026-10-25T14:22:45.934630,whitelist_remove,TESTLIVE123,127.0.0.1
+2026-10-25T14:22:58.311632,whitelist_add,DL9CAF9999,testclient
+2026-10-25T14:22:58.316232,whitelist_remove,DL9CAF9999,testclient
+2026-10-25T14:22:58.322874,clear_logs,detection_log_20261025_142258_321362.csv,testclient
+2026-10-25T14:22:58.327127,whitelist_add,UP14TEST0001,testclient
+2026-10-25T14:22:58.329395,whitelist_remove,UP14TEST0001,testclient
+2026-10-25T14:22:58.331547,clear_logs,detection_log_20261025_142258_331091.csv,testclient

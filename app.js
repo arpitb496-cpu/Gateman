@@ -6,6 +6,57 @@
 // API endpoint: Always points to port 8000 on current hostname (works on localhost, LAN IPs, and remote)
 const API = `${window.location.protocol}//${window.location.hostname || 'localhost'}:8000`;
 
+// ─── Authentication Token Management (sessionStorage) ─────────
+const AUTH_STORAGE_KEY = 'gateman_admin_token';
+
+function getAuthToken(forcePrompt = false) {
+    let token = sessionStorage.getItem(AUTH_STORAGE_KEY);
+    if (!token || forcePrompt) {
+        token = prompt('Enter Gateman Admin Authentication Token:');
+        if (token && token.trim().length > 0) {
+            token = token.trim();
+            sessionStorage.setItem(AUTH_STORAGE_KEY, token);
+        } else {
+            sessionStorage.removeItem(AUTH_STORAGE_KEY);
+            token = '';
+        }
+    }
+    return token || '';
+}
+
+function handleUnauthorized() {
+    sessionStorage.removeItem(AUTH_STORAGE_KEY);
+    if (typeof hideStatusOverlay === 'function') {
+        hideStatusOverlay();
+    }
+    // Never show ALLOWED status on 401
+    if (statusOverlay) {
+        statusOverlay.className = 'status-overlay unknown';
+        statusOverlay.innerHTML = '<span class="flex items-center gap-2"><i data-lucide="shield-alert" class="w-5 h-5"></i> 401 UNAUTHORIZED • TOKEN REQUIRED</span>';
+        if (window.lucide) lucide.createIcons();
+    }
+    if (statusText) {
+        statusText.textContent = 'AUTH ERROR (401)';
+    }
+    setTimeout(() => {
+        getAuthToken(true);
+    }, 150);
+}
+
+async function fetchWithAuth(url, options = {}) {
+    const token = getAuthToken();
+    const opts = { ...options };
+    opts.headers = new Headers(opts.headers || {});
+    if (token) {
+        opts.headers.set('Authorization', `Bearer ${token}`);
+    }
+    const res = await fetch(url, opts);
+    if (res.status === 401) {
+        handleUnauthorized();
+    }
+    return res;
+}
+
 // ─── DOM References ──────────────────────────────────────────
 const video          = document.getElementById('video-feed');
 const canvas         = document.getElementById('overlay-canvas');
@@ -149,7 +200,7 @@ setInterval(ping, 6000);
 // ─── Whitelist Management ────────────────────────────────────
 async function loadWhitelist() {
     try {
-        const r = await fetch(`${API}/whitelist`);
+        const r = await fetchWithAuth(`${API}/whitelist`);
         if (r.ok) {
             const data = await r.json();
             cachedWhitelist = new Set(data.whitelist || []);
@@ -178,9 +229,16 @@ function renderWhitelistChips(list) {
 async function removePlate(plate) {
     if (!confirm(`Remove plate ${plate} from whitelist?`)) return;
     try {
-        const r = await fetch(`${API}/whitelist/remove?plate=${encodeURIComponent(plate)}`, { method: 'POST' });
+        const r = await fetchWithAuth(`${API}/whitelist/remove`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ plate: plate })
+        });
         if (r.ok) {
             loadWhitelist();
+        } else if (r.status !== 401) {
+            const err = await r.json().catch(() => ({}));
+            alert('Failed to remove plate: ' + (err.detail || r.statusText));
         }
     } catch (e) {
         alert('Failed to remove plate: ' + e.message);
@@ -192,10 +250,17 @@ async function addModalPlate() {
     const val = input.value.trim().toUpperCase();
     if (!val) return;
     try {
-        const r = await fetch(`${API}/whitelist/add?plate=${encodeURIComponent(val)}`, { method: 'POST' });
+        const r = await fetchWithAuth(`${API}/whitelist/add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ plate: val })
+        });
         if (r.ok) {
             input.value = '';
             loadWhitelist();
+        } else if (r.status !== 401) {
+            const err = await r.json().catch(() => ({}));
+            alert('Failed to add plate: ' + (err.detail || r.statusText));
         }
     } catch (e) {
         alert('Failed to add plate: ' + e.message);
@@ -207,11 +272,18 @@ async function addQuickPlate() {
     const val = input.value.trim().toUpperCase();
     if (!val) return;
     try {
-        const r = await fetch(`${API}/whitelist/add?plate=${encodeURIComponent(val)}`, { method: 'POST' });
+        const r = await fetchWithAuth(`${API}/whitelist/add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ plate: val })
+        });
         if (r.ok) {
             input.value = '';
             loadWhitelist();
             showStatusOverlay('ALLOWED');
+        } else if (r.status !== 401) {
+            const err = await r.json().catch(() => ({}));
+            alert('Failed to add plate: ' + (err.detail || r.statusText));
         }
     } catch (e) {
         alert('Failed to add plate: ' + e.message);
@@ -230,8 +302,8 @@ function toggleWhitelistModal() {
 async function loadHistoricalLogsAndStats() {
     try {
         const [statsRes, logsRes] = await Promise.all([
-            fetch(`${API}/stats`).catch(() => null),
-            fetch(`${API}/logs?limit=30`).catch(() => null)
+            fetchWithAuth(`${API}/stats`).catch(() => null),
+            fetchWithAuth(`${API}/logs?limit=30`).catch(() => null)
         ]);
 
         if (statsRes && statsRes.ok) {
@@ -286,7 +358,7 @@ async function clearDetectionLogs() {
         return;
     }
     try {
-        const res = await fetch(`${API}/clear-logs`, { method: 'POST' });
+        const res = await fetchWithAuth(`${API}/clear-logs`, { method: 'POST' });
         if (res.ok) {
             // Reset state counters
             totalVehicles = 0;
@@ -314,7 +386,7 @@ async function clearDetectionLogs() {
                 `;
             }
             if (window.lucide) lucide.createIcons();
-        } else {
+        } else if (res.status !== 401) {
             alert('Failed to reset logs: Server returned error');
         }
     } catch (e) {
@@ -323,8 +395,25 @@ async function clearDetectionLogs() {
 }
 
 // ─── Export to Excel ─────────────────────────────────────────
-function exportExcel() {
-    window.open(`${API}/export-excel`, '_blank');
+async function exportExcel() {
+    try {
+        const r = await fetchWithAuth(`${API}/export-excel`);
+        if (!r.ok) {
+            throw new Error(`Server returned HTTP ${r.status}`);
+        }
+        const blob = await r.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const nowStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        a.download = `Gateman_Report_${nowStr}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('Failed to export report: ' + e.message);
+    }
 }
 
 // ─── Camera Enumeration (Releases test stream immediately) ───
@@ -772,7 +861,7 @@ async function detect() {
 
         const t0 = performance.now();
         try {
-            const r = await fetch(`${API}/detect`, { method: 'POST', body: fd });
+            const r = await fetchWithAuth(`${API}/detect`, { method: 'POST', body: fd });
             const latency = Math.round(performance.now() - t0);
             if (metricRealtime) metricRealtime.textContent = `${latency} ms`;
 
@@ -796,11 +885,21 @@ async function detect() {
                     statusText.textContent = 'Optical Feed Active';
                 }
             } else {
+                if (r.status === 401) {
+                    hideStatusOverlay();
+                    if (statusOverlay) {
+                        statusOverlay.className = 'status-overlay unknown';
+                        statusOverlay.innerHTML = '<span class="flex items-center gap-2"><i data-lucide="shield-alert" class="w-5 h-5"></i> 401 UNAUTHORIZED</span>';
+                        if (window.lucide) lucide.createIcons();
+                    }
+                }
                 throw new Error(`API returned HTTP ${r.status}`);
             }
         } catch (e) {
             console.error('API Error:', e);
-            if (statusText) statusText.textContent = 'Connection Error';
+            if (statusText && statusText.textContent !== 'AUTH ERROR (401)') {
+                statusText.textContent = 'Connection Error';
+            }
         } finally {
             busy = false;
             if (!autoScanOn) {
