@@ -47,17 +47,15 @@ graph TD
 
 3. **Install Dependencies**
    ```bash
-   pip install fastapi uvicorn ultralytics easyocr opencv-python pillow python-multipart openpyxl
+   pip install fastapi uvicorn ultralytics easyocr opencv-python pillow python-multipart openpyxl dill requests
    ```
 
 4. **Start the AI Backend Server**
    ```bash
-   cd backend
-   python -m uvicorn main:app --port 8000
+   python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
    ```
 
 5. **Start the Frontend Dashboard**
-   Open a new terminal in the `frontend` folder and run:
    ```bash
    python serve.py
    ```
