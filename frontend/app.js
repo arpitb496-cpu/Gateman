@@ -134,19 +134,10 @@ async function submitAuthToken() {
         } else {
             const errData = await res.json().catch(() => ({}));
             const msg = errData.detail || (res.status === 401 ? 'Invalid authentication token' : `Server error: HTTP ${res.status}`);
-            if (errBox && errTxt) {
-                errTxt.textContent = msg;
-                errBox.classList.remove('hidden');
-                if (window.lucide) lucide.createIcons();
-            }
-            lockDashboard('LOCKED - enter token');
+            showTokenModal(msg);
         }
     } catch (err) {
-        if (errBox && errTxt) {
-            errTxt.textContent = 'Connection error: ' + err.message;
-            errBox.classList.remove('hidden');
-            if (window.lucide) lucide.createIcons();
-        }
+        showTokenModal('Connection error: ' + err.message);
     } finally {
         isVerifyingToken = false;
         if (submitBtn) submitBtn.disabled = false;
@@ -374,10 +365,7 @@ async function ping() {
             }
         } else throw 0;
     } catch {
-        serverDot.style.background = '#ef4444';
-        serverDot.style.boxShadow = '0 0 10px rgba(239,68,68,0.7)';
-        if (statusText) statusText.textContent = 'BACKEND OFFLINE';
-        if (serverLbl) serverLbl.style.color = '#f87171';
+        setSystemOffline(true);
     }
 }
 ping();
@@ -1112,8 +1100,8 @@ async function detect() {
             }
         } catch (e) {
             console.error('API Error:', e);
-            if (!isSystemOffline && statusText && statusText.textContent !== 'AUTH ERROR (401)') {
-                statusText.textContent = 'Connection Error';
+            if (!e || !e.message || !e.message.includes('401')) {
+                setSystemOffline(true);
             }
         } finally {
             busy = false;

@@ -3,152 +3,277 @@ const path = require('path');
 const assert = require('assert');
 const { JSDOM } = require('jsdom');
 
-console.log('--- Running Browser-Level JSDOM Test for Gateman Frontend ---');
+async function runTests() {
+    console.log('--- Running Browser-Level JSDOM Test for Gateman Frontend ---');
 
-// 1. Verify app.js and frontend/app.js are identical
-const rootAppJsPath = path.resolve(__dirname, '../app.js');
-const frontendAppJsPath = path.resolve(__dirname, '../frontend/app.js');
-const rootAppJs = fs.readFileSync(rootAppJsPath, 'utf8');
-const frontendAppJs = fs.readFileSync(frontendAppJsPath, 'utf8');
+    // 1. Verify app.js and frontend/app.js are identical
+    const rootAppJsPath = path.resolve(__dirname, '../app.js');
+    const frontendAppJsPath = path.resolve(__dirname, '../frontend/app.js');
+    const rootAppJs = fs.readFileSync(rootAppJsPath, 'utf8');
+    const frontendAppJs = fs.readFileSync(frontendAppJsPath, 'utf8');
 
-assert.strictEqual(
-    rootAppJs,
-    frontendAppJs,
-    'Root app.js and frontend/app.js must be identical!'
-);
-console.log('✓ Verified: app.js and frontend/app.js are strictly identical');
+    assert.strictEqual(
+        rootAppJs,
+        frontendAppJs,
+        'Root app.js and frontend/app.js must be identical!'
+    );
+    console.log('✓ Verified: app.js and frontend/app.js are strictly identical');
 
-// 2. Load frontend/index.html
-const htmlPath = path.resolve(__dirname, '../frontend/index.html');
-const rawHtml = fs.readFileSync(htmlPath, 'utf8');
+    // 2. Load frontend/index.html
+    const htmlPath = path.resolve(__dirname, '../frontend/index.html');
+    const rawHtml = fs.readFileSync(htmlPath, 'utf8');
 
-// Strip external script tags (Tailwind CDN, Lucide CDN) to avoid unnecessary network fetches during test
-// and strip the inline <script src="app.js"></script> tag because we evaluate it in JSDOM directly
-const cleanHtml = rawHtml
-    .replace(/<script src="https:[^"]*"><\/script>/g, '')
-    .replace('<script src="app.js"></script>', '');
+    // Strip external CDN scripts and inline script tag
+    const cleanHtml = rawHtml
+        .replace(/<script src="https:[^"]*"><\/script>/g, '')
+        .replace('<script src="app.js"></script>', '');
 
-const uncaughtErrors = [];
-const consoleErrors = [];
+    const uncaughtErrors = [];
+    const consoleErrors = [];
 
-const dom = new JSDOM(cleanHtml, {
-    runScripts: 'outside-only',
-    url: 'http://localhost:3000/'
-});
+    const dom = new JSDOM(cleanHtml, {
+        runScripts: 'outside-only',
+        url: 'http://localhost:3000/'
+    });
 
-const { window } = dom;
+    const { window } = dom;
 
-// Track uncaught errors on the window
-window.addEventListener('error', (event) => {
-    uncaughtErrors.push(event.error || event.message || event);
-});
+    // Track uncaught errors on the window
+    window.addEventListener('error', (event) => {
+        uncaughtErrors.push(event.error || event.message || event);
+    });
 
-// Track console.error
-const originalConsoleError = window.console.error;
-window.console.error = (...args) => {
-    consoleErrors.push(args.join(' '));
-    if (originalConsoleError) originalConsoleError.apply(window.console, args);
-};
+    // Track console.error (ignore intentional console.error from API Error logging in catch blocks)
+    const originalConsoleError = window.console.error;
+    window.console.error = (...args) => {
+        const msg = args.join(' ');
+        if (!msg.includes('API Error:')) {
+            consoleErrors.push(msg);
+        }
+        if (originalConsoleError) originalConsoleError.apply(window.console, args);
+    };
 
-// Mock necessary browser APIs for headless environment
-window.lucide = {
-    createIcons: () => {}
-};
+    // Mock necessary browser APIs for headless environment
+    window.lucide = {
+        createIcons: () => {}
+    };
 
-window.requestAnimationFrame = (callback) => setTimeout(callback, 16);
-window.cancelAnimationFrame = (id) => clearTimeout(id);
+    window.requestAnimationFrame = (callback) => setTimeout(callback, 16);
+    window.cancelAnimationFrame = (id) => clearTimeout(id);
 
-window.HTMLCanvasElement.prototype.getContext = function (type) {
-    if (type === '2d') {
-        return {
-            clearRect: () => {},
-            fillRect: () => {},
-            strokeRect: () => {},
-            beginPath: () => {},
-            arc: () => {},
-            fill: () => {},
-            stroke: () => {},
-            measureText: () => ({ width: 50 }),
-            fillText: () => {},
-            save: () => {},
-            restore: () => {},
-            drawImage: () => {}
-        };
+    window.HTMLCanvasElement.prototype.getContext = function (type) {
+        if (type === '2d') {
+            return {
+                clearRect: () => {},
+                fillRect: () => {},
+                strokeRect: () => {},
+                beginPath: () => {},
+                arc: () => {},
+                fill: () => {},
+                stroke: () => {},
+                measureText: () => ({ width: 50 }),
+                fillText: () => {},
+                save: () => {},
+                restore: () => {},
+                drawImage: () => {}
+            };
+        }
+        return null;
+    };
+
+    window.HTMLCanvasElement.prototype.toBlob = function (callback) {
+        callback(new window.Blob());
+    };
+
+    window.navigator.mediaDevices = {
+        getUserMedia: async () => ({
+            getTracks: () => [{ stop: () => {} }]
+        }),
+        enumerateDevices: async () => [
+            { kind: 'videoinput', deviceId: 'default', label: 'FaceTime HD Camera' }
+        ]
+    };
+
+    window.alert = () => {};
+
+    // Ensure sessionStorage starts with no token
+    window.sessionStorage.clear();
+    assert.strictEqual(window.sessionStorage.getItem('gateman_admin_token'), null);
+
+    // Initial mock fetch: returns 200 for initial ping, 401 for whitelist without token
+    window.fetch = async (url, options = {}) => {
+        const headers = options.headers || {};
+        const auth = headers.Authorization || (headers.get && headers.get('Authorization')) || '';
+        if (url.includes('/health')) {
+            return { ok: true, status: 200, json: async () => ({ status: 'ok' }) };
+        }
+        if (url.includes('/whitelist')) {
+            if (auth.includes('valid-admin-token')) {
+                return { ok: true, status: 200, json: async () => ({ whitelist: ['MH12AB1234'] }) };
+            }
+            return {
+                ok: false,
+                status: 401,
+                json: async () => ({ detail: 'Invalid authentication token' })
+            };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+    };
+
+    // 3. Execute frontend/app.js in the window context
+    try {
+        window.eval(frontendAppJs);
+    } catch (evalErr) {
+        uncaughtErrors.push(evalErr);
     }
-    return null;
-};
 
-window.HTMLCanvasElement.prototype.toBlob = function (callback) {
-    callback(new window.Blob());
-};
+    // 4. Baseline Assertions (Page Load)
+    assert.strictEqual(
+        uncaughtErrors.length,
+        0,
+        `Expected 0 uncaught runtime errors, but found ${uncaughtErrors.length}: ${uncaughtErrors.map(e => e.stack || e).join('\n')}`
+    );
+    assert.strictEqual(
+        consoleErrors.length,
+        0,
+        `Expected 0 console.error calls, but found: ${consoleErrors.join(', ')}`
+    );
+    console.log('✓ Verified: No uncaught console or runtime errors during page load');
 
-window.navigator.mediaDevices = {
-    getUserMedia: async () => ({
-        getTracks: () => [{ stop: () => {} }]
-    }),
-    enumerateDevices: async () => [
-        { kind: 'videoinput', deviceId: 'default', label: 'FaceTime HD Camera' }
-    ]
-};
+    const modal = window.document.getElementById('auth-token-modal');
+    assert.ok(modal, 'auth-token-modal element must exist');
+    assert.strictEqual(modal.classList.contains('hidden'), false, 'Token modal must be visible on load');
 
-window.alert = (msg) => {
-    // console.log('Mocked window.alert called:', msg);
-};
+    const statusText = window.document.getElementById('status-text');
+    assert.strictEqual(statusText.textContent, 'LOCKED - enter token');
+    console.log('✓ Verified: Token modal is visible and dashboard is locked on initial load');
 
-// Ensure sessionStorage has no token
-window.sessionStorage.clear();
-assert.strictEqual(window.sessionStorage.getItem('gateman_admin_token'), null);
+    const startBtn = window.document.getElementById('start-btn');
+    assert.doesNotThrow(() => {
+        startBtn.click();
+    }, 'Clicking Start button should not throw');
+    console.log('✓ Verified: Clicking Start button executed safely without throwing');
 
-// 3. Execute frontend/app.js in the window context
-try {
-    window.eval(frontendAppJs);
-} catch (evalErr) {
-    uncaughtErrors.push(evalErr);
+    // 5. Bug 1 Test: Submit wrong token, mock 401, assert #auth-token-error is visible with text
+    console.log('\n--- Testing Bug 1: Wrong token shows error message ---');
+    const tokenInput = window.document.getElementById('auth-token-input');
+    const errBox = window.document.getElementById('auth-token-error');
+    const errTxt = window.document.getElementById('auth-token-error-text');
+
+    tokenInput.value = 'wrong-token-12345';
+    await window.eval('submitAuthToken()');
+
+    assert.strictEqual(
+        errBox.classList.contains('hidden'),
+        false,
+        'Expected #auth-token-error to be visible after submitting invalid token'
+    );
+    assert.strictEqual(
+        errTxt.textContent,
+        'Invalid authentication token',
+        'Expected error text to be "Invalid authentication token"'
+    );
+    assert.strictEqual(
+        modal.classList.contains('hidden'),
+        false,
+        'Token modal should remain visible on 401'
+    );
+    console.log('✓ Verified: #auth-token-error is visible with correct text on 401 failure');
+
+    // 6. Bug 2 Test: Backend unreachable (fetch rejection) sets system offline & stops auto-scan
+    console.log('\n--- Testing Bug 2: Backend unreachable / fetch rejection ---');
+    const banner = window.document.getElementById('system-offline-banner');
+
+    // First unlock dashboard with valid token
+    tokenInput.value = 'valid-admin-token-123456';
+    await window.eval('submitAuthToken()');
+    assert.strictEqual(modal.classList.contains('hidden'), true, 'Token modal should hide on valid token');
+
+    // Start video feed and enable auto-scan
+    await window.start();
+    const autoscanToggle = window.document.getElementById('autoscan-toggle');
+    window.setAutoScan(true);
+    assert.strictEqual(
+        autoscanToggle.getAttribute('aria-pressed'),
+        'true',
+        'autoscan toggle should be pressed (true) before network failure'
+    );
+
+    // 6a: Test ping() with network error
+    window.fetch = async () => {
+        throw new TypeError('Failed to fetch: Connection refused');
+    };
+
+    await window.ping();
+
+    assert.strictEqual(
+        banner.classList.contains('hidden'),
+        false,
+        'Expected #system-offline-banner to be visible when ping() encounters network failure'
+    );
+    assert.strictEqual(
+        autoscanToggle.getAttribute('aria-pressed'),
+        'false',
+        'Expected auto-scan to be stopped (aria-pressed = false) after network failure'
+    );
+    console.log('✓ Verified: ping() network failure displays offline banner and stops auto-scan');
+
+    // 6b: Test subsequent successful ping clears system offline
+    window.fetch = async (url) => {
+        if (url.includes('/health')) {
+            return { ok: true, status: 200, json: async () => ({ status: 'ok' }) };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+    };
+
+    await window.ping();
+    assert.strictEqual(
+        banner.classList.contains('hidden'),
+        true,
+        'Expected #system-offline-banner to be hidden after successful ping'
+    );
+    console.log('✓ Verified: subsequent successful ping clears system offline banner');
+
+    // 6c: Test detect() with network error
+    window.setAutoScan(true);
+    assert.strictEqual(
+        autoscanToggle.getAttribute('aria-pressed'),
+        'true',
+        'autoscan toggle should be re-enabled before detect network test'
+    );
+
+    // Force network rejection on detect
+    window.fetch = async () => {
+        throw new TypeError('Network error during /detect');
+    };
+
+    // Ensure video dimensions are set so detect() attempts fetch
+    const videoElem = window.document.getElementById('video-feed');
+    Object.defineProperty(videoElem, 'videoWidth', { value: 640, configurable: true });
+    Object.defineProperty(videoElem, 'videoHeight', { value: 480, configurable: true });
+
+    await window.detect();
+    // Allow async toBlob callback and microtasks to complete
+    await new Promise(r => setTimeout(r, 50));
+
+    assert.strictEqual(
+        banner.classList.contains('hidden'),
+        false,
+        'Expected #system-offline-banner to be visible when detect() encounters network failure'
+    );
+    assert.strictEqual(
+        autoscanToggle.getAttribute('aria-pressed'),
+        'false',
+        'Expected auto-scan to be stopped after detect() network failure'
+    );
+    console.log('✓ Verified: detect() network failure displays offline banner and stops auto-scan');
+
+    console.log('\nAll browser-level checks passed successfully!');
+    dom.window.close();
+    process.exit(0);
 }
 
-// 4. Assertions
-
-// Assertion A: No uncaught console or runtime errors during page load / script execution
-assert.strictEqual(
-    uncaughtErrors.length,
-    0,
-    `Expected 0 uncaught runtime errors, but found ${uncaughtErrors.length}: ${uncaughtErrors.map(e => e.stack || e).join('\n')}`
-);
-assert.strictEqual(
-    consoleErrors.length,
-    0,
-    `Expected 0 console.error calls, but found: ${consoleErrors.join(', ')}`
-);
-console.log('✓ Verified: No uncaught console or runtime errors during page load');
-
-// Assertion B: The token modal is visible (i.e., does not contain the 'hidden' class)
-const modal = window.document.getElementById('auth-token-modal');
-assert.ok(modal, 'auth-token-modal element must exist in the DOM');
-assert.strictEqual(
-    modal.classList.contains('hidden'),
-    false,
-    'Expected #auth-token-modal to be visible (not containing "hidden" class)'
-);
-
-const statusText = window.document.getElementById('status-text');
-assert.strictEqual(
-    statusText.textContent,
-    'LOCKED - enter token',
-    'Expected status-text to display "LOCKED - enter token"'
-);
-console.log('✓ Verified: Token modal is visible and dashboard is locked with "LOCKED - enter token"');
-
-// Assertion C: Clicking Start does not throw
-const startBtn = window.document.getElementById('start-btn');
-assert.ok(startBtn, 'start-btn element must exist in the DOM');
-
-assert.doesNotThrow(() => {
-    startBtn.click();
-}, 'Clicking Start button should not throw an exception');
-console.log('✓ Verified: Clicking Start button executed safely without throwing');
-
-console.log('\nAll browser-level checks passed successfully!');
-
-// Clean up JSDOM window and exit cleanly
-dom.window.close();
-process.exit(0);
+runTests().catch((err) => {
+    console.error('Test failed with error:', err);
+    process.exit(1);
+});
