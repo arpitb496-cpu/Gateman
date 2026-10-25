@@ -192,3 +192,39 @@ class TestInvalidAndUnregisteredPlates:
         res = clean_and_validate_plate("DL3CAQ1111", {"MP20CK7416"})
         assert res.plate == "DL3CAQ1111"
         assert res.status == "UNKNOWN"
+
+
+class TestBhSeriesAndStructuralRtoParsing:
+    """
+    Test suite for:
+    (a) BH-series plate detection and normalization without state-letter mapping
+    (b) Single-digit vs Two-digit RTO structural parsing without blind index corruption
+    """
+
+    @pytest.mark.parametrize("plate", [
+        "MH12AB1234",
+        "DL3CAQ0001",
+        "DL1SAB1234",
+        "DL1SBC1234",
+        "MH20DV2366",
+        "22BH6517A",
+        "23BH1234AB",
+        "24BH5678A",
+    ])
+    def test_unchanged_unregistered_plates_return_unknown(self, plate):
+        """These must come back unchanged with status UNKNOWN when whitelist is empty."""
+        res = clean_and_validate_plate(plate, whitelist=set())
+        assert res.plate == plate
+        assert res.status == "UNKNOWN"
+
+    def test_ocr_noise_correction_non_whitelisted(self):
+        """OCR-noise cases must be corrected: MP2OCK7416 -> MP20CK7416 (UNKNOWN when not whitelisted)."""
+        res = clean_and_validate_plate("MP2OCK7416", whitelist=set())
+        assert res.plate == "MP20CK7416"
+        assert res.status == "UNKNOWN"
+
+    def test_bh_series_ocr_noise_correction(self):
+        """BH series with year or number OCR confusion (e.g. S instead of 5 in number)."""
+        res = clean_and_validate_plate("22BH6S17A", whitelist=set())
+        assert res.plate == "22BH6517A"
+        assert res.status == "UNKNOWN"

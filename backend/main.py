@@ -283,36 +283,121 @@ def clean_and_validate_plate(text, whitelist=None) -> ValidationResult:
         if len(cand) < 7 or len(cand) > 11:
             continue
 
-        chars = list(cand)
-        n = len(chars)
+        # (a) Check BH-Series first:
+        # Format: [2 digits Year] BH [4 digits Number] [1-2 letters Series]
+        # Detect BH format first and skip state-letter normalization so digits in year (e.g. 22) don't map to letters.
+        if len(cand) in (9, 10) and (cand[2:4] == "BH" or cand[2:4] == "8H"):
+            y0 = CHAR_TO_NUM.get(cand[0], cand[0])
+            y1 = CHAR_TO_NUM.get(cand[1], cand[1])
+            num_part = "".join(CHAR_TO_NUM.get(c, c) for c in cand[4:8])
+            ser_part = "".join(NUM_TO_CHAR.get(c, c) for c in cand[8:])
+            bh_plate = f"{y0}{y1}BH{num_part}{ser_part}"
+            if re.match(r'^([0-9]{2})BH([0-9]{4})([A-Z]{1,2})$', bh_plate):
+                return ValidationResult(bh_plate, "UNKNOWN")
 
-        # Positions 0 & 1: State letters
-        chars[0] = NUM_TO_CHAR.get(chars[0], chars[0])
-        chars[1] = NUM_TO_CHAR.get(chars[1], chars[1])
+        # (b) Standard Indian Plate Structural Parser:
+        # [State letters: 2] [RTO: 1 or 2 digits] [Series: 1-3 letters] [Number: 3-4 digits]
+        # Try both 1-digit and 2-digit RTO interpretations and keep the one that fits.
+        # If both fit, prefer the one with no (fewest) character changes.
+        state_raw = cand[0:2]
+        s0 = NUM_TO_CHAR.get(state_raw[0], state_raw[0])
+        s1 = NUM_TO_CHAR.get(state_raw[1], state_raw[1])
+        if state_raw in INDIAN_STATES:
+            state = state_raw
+            state_changes = 0
+        elif (s0 + s1) in INDIAN_STATES:
+            state = s0 + s1
+            state_changes = (s0 != state_raw[0]) + (s1 != state_raw[1])
+        else:
+            continue
 
-        # Position 2: District digit
-        chars[2] = CHAR_TO_NUM.get(chars[2], chars[2])
+        rest = cand[2:]
+        L = len(rest)
+        valid_interpretations = []
 
-        # Position 3: District digit if followed by series
-        if n >= 9 and chars[3] in ['O', 'Q', 'D', 'I', 'Z', 'B', 'S']:
-            chars[3] = CHAR_TO_NUM.get(chars[3], chars[3])
+        for rto_len in (1, 2):
+            if L <= rto_len + 3:
+                continue
 
-        # Tail characters: Numbers
-        tail_len = 4 if n >= 9 else 3
-        for i in range(n - tail_len, n):
-            chars[i] = CHAR_TO_NUM.get(chars[i], chars[i])
+            raw_rto = rest[:rto_len]
+            after_rto = rest[rto_len:]
+            M = len(after_rto)
 
-        fixed_text = ''.join(chars)
+            # Series length can be 1, 2, or 3
+            for ser_len in (1, 2, 3):
+                num_len = M - ser_len
+                if num_len not in (3, 4):
+                    continue
 
-        # Standard Indian RTO format
-        m = re.match(r'^([A-Z]{2})([0-9]{1,2})([A-Z]{1,3})([0-9]{3,4})$', fixed_text)
-        if m and m.group(1) in INDIAN_STATES:
-            return ValidationResult(fixed_text, "UNKNOWN")
+                raw_ser = after_rto[:ser_len]
+                raw_num = after_rto[ser_len:]
 
-        # BH Series
-        bh = re.match(r'^([0-9]{2})BH([0-9]{4})([A-Z]{1,2})$', fixed_text)
-        if bh:
-            return ValidationResult(fixed_text, "UNKNOWN")
+                # 1. RTO digits validation & normalization
+                rto_chars = []
+                rto_changes = 0
+                rto_valid = True
+                for c in raw_rto:
+                    if c.isdigit():
+                        rto_chars.append(c)
+                    elif c in CHAR_TO_NUM and CHAR_TO_NUM[c].isdigit():
+                        rto_chars.append(CHAR_TO_NUM[c])
+                        rto_changes += 1
+                    else:
+                        rto_valid = False
+                        break
+                if not rto_valid:
+                    continue
+
+                # 2. Series letters validation & normalization
+                # Indian registration marks strictly omit 'I' and 'O' to avoid confusion with 1 and 0.
+                ser_chars = []
+                ser_changes = 0
+                ser_valid = True
+                for c in raw_ser:
+                    if c.isalpha() and c not in ('O', 'I'):
+                        ser_chars.append(c)
+                    elif c in NUM_TO_CHAR and NUM_TO_CHAR[c] not in ('O', 'I'):
+                        ser_chars.append(NUM_TO_CHAR[c])
+                        ser_changes += 1
+                    else:
+                        ser_valid = False
+                        break
+                if not ser_valid:
+                    continue
+
+                # 3. Number digits validation & normalization
+                num_chars = []
+                num_changes = 0
+                num_valid = True
+                for c in raw_num:
+                    if c.isdigit():
+                        num_chars.append(c)
+                    elif c in CHAR_TO_NUM and CHAR_TO_NUM[c].isdigit():
+                        num_chars.append(CHAR_TO_NUM[c])
+                        num_changes += 1
+                    else:
+                        num_valid = False
+                        break
+                if not num_valid:
+                    continue
+
+                total_changes = state_changes + rto_changes + ser_changes + num_changes
+                rto_str = "".join(rto_chars)
+                ser_str = "".join(ser_chars)
+                num_str = "".join(num_chars)
+                plate_candidate = f"{state}{rto_str}{ser_str}{num_str}"
+
+                if re.match(r'^([A-Z]{2})([0-9]{1,2})([A-Z]{1,3})([0-9]{3,4})$', plate_candidate):
+                    valid_interpretations.append({
+                        "changes": total_changes,
+                        "rto_len": rto_len,
+                        "plate": plate_candidate
+                    })
+
+        if valid_interpretations:
+            # Sort by fewest character changes (prefer 0 changes if both fit)
+            valid_interpretations.sort(key=lambda x: x["changes"])
+            return ValidationResult(valid_interpretations[0]["plate"], "UNKNOWN")
 
     return ValidationResult(None, None)
 
