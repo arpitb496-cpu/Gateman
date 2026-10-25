@@ -8,7 +8,7 @@ if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
 # Import the optimized app
-from backend.main import app
+from backend.main import app, DEFAULT_CORS_ORIGINS, DEFAULT_ORIGINS, CORS_ORIGINS
 
 if __name__ == "__main__":
     import uvicorn

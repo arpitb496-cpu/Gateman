@@ -48,10 +48,27 @@ PLATE_MODEL_PATH = find_file("kbest.pt")
 app = FastAPI(title="Automatic Gateman API - Apple Silicon GPU Accelerated")
 
 # CORS setup (W3C compliant)
+# The dashboard is served from port 3000 and calls the API on port 8000, so the default CORS origin list must include http://localhost:3000
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+DEFAULT_ORIGINS = DEFAULT_CORS_ORIGINS
+
+cors_origins_env = os.environ.get("CORS_ORIGINS", "")
+if cors_origins_env:
+    CORS_ORIGINS = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+    if "http://localhost:3000" not in CORS_ORIGINS:
+        CORS_ORIGINS.append("http://localhost:3000")
+else:
+    CORS_ORIGINS = list(DEFAULT_CORS_ORIGINS)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
