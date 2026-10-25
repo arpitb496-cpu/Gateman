@@ -3,8 +3,10 @@
    Camera capture, API calls, canvas overlay, auto-scan, particle bg
    ============================================================ */
 
-// API endpoint: Always points to port 8000 on current hostname (works on localhost, LAN IPs, and remote)
-const API = `${window.location.protocol}//${window.location.hostname || 'localhost'}:8000`;
+// API endpoint: Always points to port 8000 on current hostname (handles http, https, file:, localhost, and LAN)
+const apiProtocol = (window.location.protocol === 'http:' || window.location.protocol === 'https:') ? window.location.protocol : 'http:';
+const apiHostname = (window.location.hostname && window.location.hostname !== '0.0.0.0') ? window.location.hostname : 'localhost';
+const API = `${apiProtocol}//${apiHostname}:8000`;
 
 // ─── Authentication Token Management ─────────────────────────
 const AUTH_STORAGE_KEY = 'gateman_admin_token';
@@ -49,10 +51,16 @@ function lockDashboard(reason = 'LOCKED - enter token') {
 }
 
 function showTokenModal(errorMessage = '') {
+    isVerifyingToken = false;
     const modal = document.getElementById('auth-token-modal');
     const input = document.getElementById('auth-token-input');
     const errBox = document.getElementById('auth-token-error');
     const errTxt = document.getElementById('auth-token-error-text');
+    const submitBtn = document.getElementById('auth-token-submit-btn');
+    const submitTxt = document.getElementById('auth-token-submit-text');
+
+    if (submitBtn) submitBtn.disabled = false;
+    if (submitTxt) submitTxt.textContent = 'Unlock Dashboard';
 
     if (modal) {
         modal.classList.remove('hidden');
@@ -136,10 +144,17 @@ async function submitAuthToken() {
     if (submitBtn) submitBtn.disabled = true;
     if (submitTxt) submitTxt.textContent = 'Verifying...';
 
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutTimer = controller ? setTimeout(() => controller.abort(), 6000) : null;
+
     try {
-        const res = await fetch(`${API}/whitelist`, {
+        const fetchOpts = {
             headers: { 'Authorization': `Bearer ${candidate}` }
-        });
+        };
+        if (controller) fetchOpts.signal = controller.signal;
+
+        const res = await fetch(`${API}/whitelist`, fetchOpts);
+        if (timeoutTimer) clearTimeout(timeoutTimer);
 
         if (res.ok) {
             setAuthToken(candidate);
@@ -163,7 +178,12 @@ async function submitAuthToken() {
             showTokenModal(msg);
         }
     } catch (err) {
-        showTokenModal('Connection error: Cannot reach backend API on port 8000. Is uvicorn running?');
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        if (err.name === 'AbortError') {
+            showTokenModal('Request timed out: Backend at ' + API + ' did not respond within 6s.');
+        } else {
+            showTokenModal('Connection error: Cannot reach backend API at ' + API + '. Make sure Uvicorn is running.');
+        }
     } finally {
         isVerifyingToken = false;
         if (submitBtn) submitBtn.disabled = false;
