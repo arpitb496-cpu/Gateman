@@ -105,11 +105,14 @@ DEFAULT_ORIGINS = DEFAULT_CORS_ORIGINS
 
 cors_origins_env = os.environ.get("CORS_ORIGINS", "")
 if cors_origins_env:
-    CORS_ORIGINS = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
-    if "http://localhost:3000" not in CORS_ORIGINS:
-        CORS_ORIGINS.append("http://localhost:3000")
-    if "http://127.0.0.1:3000" not in CORS_ORIGINS:
-        CORS_ORIGINS.append("http://127.0.0.1:3000")
+    if cors_origins_env.strip() == "*":
+        CORS_ORIGINS = ["*"]
+    else:
+        CORS_ORIGINS = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+        if "http://localhost:3000" not in CORS_ORIGINS:
+            CORS_ORIGINS.append("http://localhost:3000")
+        if "http://127.0.0.1:3000" not in CORS_ORIGINS:
+            CORS_ORIGINS.append("http://127.0.0.1:3000")
 else:
     CORS_ORIGINS = list(DEFAULT_CORS_ORIGINS)
 

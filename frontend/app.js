@@ -3,10 +3,78 @@
    Camera capture, API calls, canvas overlay, auto-scan, particle bg
    ============================================================ */
 
-// API endpoint: Always points to port 8000 on current hostname (handles http, https, file:, localhost, and LAN)
-const apiProtocol = (window.location.protocol === 'http:' || window.location.protocol === 'https:') ? window.location.protocol : 'http:';
-const apiHostname = (window.location.hostname && window.location.hostname !== '0.0.0.0') ? window.location.hostname : 'localhost';
-const API = `${apiProtocol}//${apiHostname}:8000`;
+// ─── Backend API Endpoint Configuration (Local, LAN, & Live) ──
+function getApiBaseUrl() {
+    try {
+        if (typeof window !== 'undefined' && window.location && window.location.search) {
+            const params = new URLSearchParams(window.location.search);
+            const queryApi = params.get('api');
+            if (queryApi && queryApi.trim()) {
+                const clean = queryApi.trim().replace(/\/+$/, '');
+                try { localStorage.setItem('gateman_api_url', clean); } catch (e) {}
+                return clean;
+            }
+        }
+    } catch (e) {}
+
+    try {
+        const saved = localStorage.getItem('gateman_api_url');
+        if (saved && saved.trim()) {
+            return saved.trim().replace(/\/+$/, '');
+        }
+    } catch (e) {}
+
+    if (typeof window !== 'undefined' && window.GATEMAN_API_URL) {
+        return window.GATEMAN_API_URL.replace(/\/+$/, '');
+    }
+
+    if (typeof window === 'undefined' || !window.location) {
+        return 'http://localhost:8000';
+    }
+
+    const hostname = window.location.hostname || '';
+    const protocol = (window.location.protocol === 'http:' || window.location.protocol === 'https:') ? window.location.protocol : 'http:';
+    const isLocalhost = !hostname || hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0';
+
+    if (isLocalhost) {
+        return `http://${hostname || 'localhost'}:8000`;
+    }
+
+    if (window.location.port === '8000') {
+        return `${protocol}//${hostname}:8000`;
+    }
+
+    if (protocol === 'https:' || !window.location.port || window.location.port === '443' || window.location.port === '80') {
+        return window.location.origin;
+    }
+
+    if (window.location.port === '3000') {
+        return `${protocol}//${hostname}:8000`;
+    }
+
+    return window.location.origin;
+}
+
+let API = getApiBaseUrl();
+
+function updateApiBaseUrl(newUrl) {
+    if (newUrl && newUrl.trim()) {
+        API = newUrl.trim().replace(/\/+$/, '');
+        try { localStorage.setItem('gateman_api_url', API); } catch (e) {}
+    } else {
+        try { localStorage.removeItem('gateman_api_url'); } catch (e) {}
+        API = getApiBaseUrl();
+    }
+    syncApiDisplay();
+    ping();
+}
+
+function syncApiDisplay() {
+    const display = document.getElementById('current-api-display');
+    if (display) display.textContent = API;
+    const input = document.getElementById('backend-url-input');
+    if (input && !input.value) input.value = API;
+}
 
 // ─── Authentication Token Management ─────────────────────────
 const AUTH_STORAGE_KEY = 'gateman_admin_token';
@@ -80,6 +148,7 @@ function showTokenModal(errorMessage = '') {
         input.value = '';
         setTimeout(() => input.focus(), 80);
     }
+    syncApiDisplay();
     if (window.lucide) lucide.createIcons();
 }
 
@@ -113,6 +182,44 @@ function toggleTokenVisibility() {
         if (icon) icon.setAttribute('data-lucide', 'eye');
     }
     if (window.lucide) lucide.createIcons();
+}
+
+function toggleServerSettings() {
+    const panel = document.getElementById('server-settings-panel');
+    const chevron = document.getElementById('server-settings-chevron');
+    const input = document.getElementById('backend-url-input');
+    if (!panel) return;
+    panel.classList.toggle('hidden');
+    const isHidden = panel.classList.contains('hidden');
+    panel.style.display = isHidden ? 'none' : 'block';
+    if (chevron) {
+        chevron.style.transform = isHidden ? 'rotate(0deg)' : 'rotate(180deg)';
+    }
+    if (!isHidden && input) {
+        input.value = API;
+        setTimeout(() => input.focus(), 60);
+    }
+    if (window.lucide) lucide.createIcons();
+}
+
+function applyCustomBackendUrl() {
+    const input = document.getElementById('backend-url-input');
+    const val = input ? input.value.trim() : '';
+    if (!val) {
+        updateApiBaseUrl('');
+    } else {
+        let clean = val;
+        if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+            clean = (window.location.protocol === 'https:' ? 'https://' : 'http://') + clean;
+        }
+        updateApiBaseUrl(clean);
+    }
+    const errBox = document.getElementById('auth-token-error');
+    if (errBox) {
+        errBox.classList.add('hidden');
+        errBox.style.display = 'none';
+    }
+    toggleServerSettings();
 }
 
 async function submitAuthToken() {
@@ -179,10 +286,13 @@ async function submitAuthToken() {
         }
     } catch (err) {
         if (timeoutTimer) clearTimeout(timeoutTimer);
-        if (err.name === 'AbortError') {
-            showTokenModal('Request timed out: Backend at ' + API + ' did not respond within 6s.');
-        } else {
-            showTokenModal('Connection error: Cannot reach backend API at ' + API + '. Make sure Uvicorn is running.');
+        const errDetail = err.name === 'AbortError'
+            ? 'Connection timed out: Backend at ' + API + ' did not respond within 6s.'
+            : 'Cannot reach backend API at ' + API + '.';
+        showTokenModal(errDetail + ' If your backend is hosted separately, check the URL below.');
+        const panel = document.getElementById('server-settings-panel');
+        if (panel && panel.classList.contains('hidden')) {
+            toggleServerSettings();
         }
     } finally {
         isVerifyingToken = false;

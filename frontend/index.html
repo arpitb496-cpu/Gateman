@@ -512,6 +512,50 @@
                         <span id="auth-token-submit-text">Unlock Dashboard</span>
                     </button>
                 </div>
+
+                <!-- Live Backend API Configuration -->
+                <div class="mt-4 pt-3 border-t border-slate-800">
+                    <button
+                        type="button"
+                        id="toggle-server-settings-btn"
+                        onclick="toggleServerSettings()"
+                        class="touch-target w-full flex items-center justify-between text-xs text-slate-400 hover:text-slate-200 py-1 transition-colors cursor-pointer"
+                        aria-expanded="false"
+                    >
+                        <span class="flex items-center gap-1.5 truncate">
+                            <i data-lucide="server" class="w-3.5 h-3.5 text-blue-400 flex-shrink-0"></i>
+                            <span class="text-slate-400">API:</span>
+                            <span id="current-api-display" class="font-mono text-[11px] text-blue-300 font-semibold truncate"></span>
+                        </span>
+                        <span class="text-[10px] text-blue-400 hover:underline flex-shrink-0 ml-2 flex items-center gap-0.5">
+                            <span>Change</span>
+                            <i data-lucide="chevron-down" id="server-settings-chevron" class="w-3.5 h-3.5 transition-transform duration-200"></i>
+                        </span>
+                    </button>
+                    <div id="server-settings-panel" class="hidden mt-2 p-3 bg-slate-900/90 rounded-xl border border-slate-800 space-y-2">
+                        <label for="backend-url-input" class="block text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                            Backend API Endpoint
+                        </label>
+                        <div class="flex gap-2">
+                            <input
+                                type="text"
+                                id="backend-url-input"
+                                placeholder="e.g. https://my-backend.railway.app or http://localhost:8000"
+                                class="touch-target flex-grow bg-slate-950 border border-slate-700 text-xs px-3 py-2 rounded-xl font-mono text-white placeholder-slate-500 outline-none focus:border-blue-500"
+                            />
+                            <button
+                                type="button"
+                                onclick="applyCustomBackendUrl()"
+                                class="touch-target bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white text-xs font-semibold px-3 py-2 rounded-xl flex-shrink-0 cursor-pointer"
+                            >
+                                Set URL
+                            </button>
+                        </div>
+                        <p class="text-[10px] text-slate-400 leading-normal">
+                            If your backend is hosted separately (e.g. Render, Railway, ngrok, or a cloud server), enter its full URL here.
+                        </p>
+                    </div>
+                </div>
             </form>
         </div>
     </div>
