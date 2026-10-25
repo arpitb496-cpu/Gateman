@@ -198,6 +198,7 @@ const metricTotal    = document.getElementById('metric-total');
 const metricScanned  = document.getElementById('metric-scanned');
 const metricRealtime = document.getElementById('metric-realtime');
 const statusOverlay  = document.getElementById('status-overlay');
+const systemOfflineBanner = document.getElementById('system-offline-banner');
 const manualScanBtn  = document.getElementById('manual-scan-btn');
 const autoscanToggle = document.getElementById('autoscan-toggle');
 const autoscanKnob   = document.getElementById('autoscan-knob');
@@ -209,6 +210,7 @@ let stream           = null;
 let autoScanLoop     = null;
 let busy             = false;
 let autoScanOn       = false;
+let isSystemOffline  = false;
 let statusTimer      = null;
 let totalVehicles    = 0;
 let totalPlates      = 0;
@@ -216,6 +218,48 @@ let totalLogs        = 0;
 let activityHistory  = new Array(12).fill(0);
 let plateBuffer      = [];
 let cachedWhitelist  = new Set();
+
+function setSystemOffline(offline) {
+    isSystemOffline = Boolean(offline);
+    const banner = document.getElementById('system-offline-banner');
+    if (isSystemOffline) {
+        if (banner) {
+            banner.classList.remove('hidden');
+        }
+        if (autoScanOn) {
+            setAutoScan(false);
+        }
+        if (typeof autoScanTimer !== 'undefined' && autoScanTimer) {
+            clearTimeout(autoScanTimer);
+            autoScanTimer = null;
+        }
+        if (statusOverlay) {
+            if (statusTimer) clearTimeout(statusTimer);
+            statusOverlay.innerHTML = '<span class="flex items-center gap-2"><i data-lucide="alert-triangle" class="w-5 h-5"></i> SYSTEM OFFLINE - MANUAL CONTROL</span>';
+            statusOverlay.className = 'status-overlay unknown';
+        }
+        if (statusText) {
+            statusText.textContent = 'SYSTEM OFFLINE - MANUAL CONTROL';
+        }
+        if (serverDot) {
+            serverDot.style.background = '#ef4444';
+            serverDot.style.boxShadow = '0 0 10px rgba(239,68,68,0.7)';
+        }
+        if (serverLbl) {
+            serverLbl.style.color = '#f87171';
+        }
+        if (window.lucide) {
+            lucide.createIcons();
+        }
+    } else {
+        if (banner) {
+            banner.classList.add('hidden');
+        }
+        if (statusOverlay && statusOverlay.innerHTML.includes('SYSTEM OFFLINE')) {
+            hideStatusOverlay();
+        }
+    }
+}
 
 // ─── Levenshtein Edit Distance (for Plate Deduplication) ──────
 const getEditDist = (a, b) => {
@@ -301,12 +345,17 @@ async function ping() {
         const r = await fetch(`${API}/health`, { cache: 'no-store' });
         if (r.ok) {
             const data = await r.json();
-            serverDot.style.background = '#10b981';
-            serverDot.style.boxShadow = '0 0 10px rgba(16,185,129,0.7)';
-            if (statusText && statusText.textContent.includes('OFFLINE')) {
-                statusText.textContent = 'ANPR Engine Active';
+            if (data.status === 'degraded') {
+                setSystemOffline(true);
+            } else {
+                setSystemOffline(false);
+                serverDot.style.background = '#10b981';
+                serverDot.style.boxShadow = '0 0 10px rgba(16,185,129,0.7)';
+                if (statusText && (statusText.textContent.includes('OFFLINE') || statusText.textContent.includes('MANUAL CONTROL'))) {
+                    statusText.textContent = 'ANPR Engine Active';
+                }
+                if (serverLbl) serverLbl.style.color = '#34d399';
             }
-            if (serverLbl) serverLbl.style.color = '#34d399';
         } else throw 0;
     } catch {
         serverDot.style.background = '#ef4444';
@@ -401,7 +450,9 @@ async function addQuickPlate() {
         if (r.ok) {
             input.value = '';
             loadWhitelist();
-            showStatusOverlay('ALLOWED');
+            if (!isSystemOffline) {
+                showStatusOverlay('ALLOWED');
+            }
         } else if (r.status !== 401) {
             const err = await r.json().catch(() => ({}));
             alert('Failed to add plate: ' + (err.detail || r.statusText));
@@ -578,16 +629,20 @@ async function exportExcel() {
 let autoScanTimer = null;
 
 function triggerNextScan() {
-    if (!autoScanOn || !stream || isDashboardLocked || !getAuthToken()) return;
+    if (!autoScanOn || !stream || isDashboardLocked || isSystemOffline || !getAuthToken()) return;
     if (autoScanTimer) clearTimeout(autoScanTimer);
     autoScanTimer = setTimeout(() => {
-        if (autoScanOn && !busy && stream && !isDashboardLocked && getAuthToken()) {
+        if (autoScanOn && !busy && stream && !isDashboardLocked && !isSystemOffline && getAuthToken()) {
             detect();
         }
     }, 30); // 30ms ultra-low throttle keeps inference continuous at full GPU speed
 }
 
 function setAutoScan(on) {
+    if (on && isSystemOffline) {
+        console.warn('Cannot enable auto-scan while system is offline.');
+        return;
+    }
     if (on && (!getAuthToken() || isDashboardLocked)) {
         lockDashboard('LOCKED - enter token');
         return;
@@ -888,6 +943,10 @@ function manualCloseGate() {
 }
 
 function handleGateAccess(plateText, status) {
+    if (isSystemOffline) {
+        flashRestrictedBarrier();
+        return;
+    }
     const clean = plateText.trim();
     const now = Date.now();
     const lastSpoken = lastSpokenPlates.get(clean) || 0;
@@ -922,6 +981,14 @@ function handleGateAccess(plateText, status) {
 function showStatusOverlay(status) {
     if (!statusOverlay) return;
     if (statusTimer) clearTimeout(statusTimer);
+
+    if (isSystemOffline) {
+        if (status === 'ALLOWED') return; // NEVER show ALLOWED
+        statusOverlay.innerHTML = '<span class="flex items-center gap-2"><i data-lucide="alert-triangle" class="w-5 h-5"></i> SYSTEM OFFLINE - MANUAL CONTROL</span>';
+        statusOverlay.className = 'status-overlay unknown';
+        if (window.lucide) lucide.createIcons();
+        return;
+    }
 
     if (status === 'ALLOWED') {
         statusOverlay.innerHTML = '<span class="flex items-center gap-2"><i data-lucide="shield-check" class="w-5 h-5"></i> ACCESS GRANTED • AUTHORIZED</span>';
@@ -1006,21 +1073,25 @@ async function detect() {
                 draw(data);
                 logPlates(data);
 
-                if (data.status) {
+                if (!isSystemOffline && data.status) {
                     showStatusOverlay(data.status);
                 }
 
                 if (data.plates && data.plates.length > 0 && data.plates[0].text !== '...') {
                     const topPlate = data.plates[0];
-                    if (statusText) {
+                    if (statusText && !isSystemOffline) {
                         statusText.textContent = `Scanned: ${topPlate.text}`;
                     }
-                    handleGateAccess(topPlate.text, data.status);
-                } else if (statusText) {
+                    if (!isSystemOffline) {
+                        handleGateAccess(topPlate.text, data.status);
+                    }
+                } else if (statusText && !isSystemOffline) {
                     statusText.textContent = 'Optical Feed Active';
                 }
             } else {
-                if (r.status === 401) {
+                if (r.status === 503) {
+                    setSystemOffline(true);
+                } else if (r.status === 401) {
                     hideStatusOverlay();
                     if (statusOverlay) {
                         statusOverlay.className = 'status-overlay unknown';
@@ -1032,7 +1103,7 @@ async function detect() {
             }
         } catch (e) {
             console.error('API Error:', e);
-            if (statusText && statusText.textContent !== 'AUTH ERROR (401)') {
+            if (!isSystemOffline && statusText && statusText.textContent !== 'AUTH ERROR (401)') {
                 statusText.textContent = 'Connection Error';
             }
         } finally {
@@ -1042,7 +1113,9 @@ async function detect() {
                 manualScanBtn.disabled  = false;
                 lucide.createIcons();
             }
-            triggerNextScan();
+            if (!isSystemOffline) {
+                triggerNextScan();
+            }
         }
     }, 'image/jpeg', 0.85);
 }
@@ -1081,7 +1154,7 @@ function draw(d) {
         const [x1, y1, x2, y2] = p.box;
         const w = x2 - x1;
         const h = y2 - y1;
-        const isAllowed = p.status === 'ALLOWED' || (!p.status && d.status === 'ALLOWED');
+        const isAllowed = !isSystemOffline && (p.status === 'ALLOWED' || (!p.status && d.status === 'ALLOWED'));
         const isConfirm = p.status === 'NEEDS_CONFIRM' || (!p.status && d.status === 'NEEDS_CONFIRM');
         const plateColor = p.text === '...' ? '#38bdf8' : (isAllowed ? '#10b981' : (isConfirm ? '#f59e0b' : '#ef4444'));
 
@@ -1139,11 +1212,15 @@ function logPlates(d) {
         // 4-second cooldown per plate so standing vehicles don't spam duplicate rows
         if (now - lastSeen > 4000) {
             lastSeenPlates.set(cleanText, now);
+            let effectiveStatus = p.status || d.status || (cachedWhitelist.has(cleanText) ? 'ALLOWED' : 'UNKNOWN');
+            if (isSystemOffline && effectiveStatus === 'ALLOWED') {
+                effectiveStatus = 'UNKNOWN';
+            }
             commitPlateToLog({
                 text: cleanText,
                 confidence: p.confidence || 0.9,
                 type: p.vehicle_type || 'Vehicle',
-                status: p.status || d.status || (cachedWhitelist.has(cleanText) ? 'ALLOWED' : 'UNKNOWN'),
+                status: effectiveStatus,
                 timestamp: now
             });
         }
@@ -1151,6 +1228,9 @@ function logPlates(d) {
 }
 
 function commitPlateToLog(p) {
+    if (isSystemOffline && p.status === 'ALLOWED') {
+        p.status = 'UNKNOWN';
+    }
     const emptyRow = document.getElementById('log-empty-row');
     if (emptyRow) emptyRow.remove();
 

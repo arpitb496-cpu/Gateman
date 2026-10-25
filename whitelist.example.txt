@@ -1,0 +1,9 @@
+# Gateman Whitelist Example
+# Copy this file to $GATEMAN_DATA_DIR/whitelist.txt (or project root whitelist.txt)
+# One plate number per line, uppercase alphanumeric
+DL01AB1234
+MH12CD5678
+KA05EF9012
+HR26GH3456
+UP16IJ7890
+22BH6517A

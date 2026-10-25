@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+
+# Python & Virtual Environments
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Data files (persisted in VOLUME /data, never baked into image)
+whitelist.txt
+whitelist_*.tmp
+detection_log.csv
+detection_log_*.csv
+detection_log.txt
+audit_log.csv
+/data
+
+# Model backups and temporary artifacts
+*.pt.bak
+*.pt.old
+*.pt.backup
+*backup*
+*.tmp
+
+# Tests, IDE and Scratch
+tests/
+.pytest_cache/
+scratch/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

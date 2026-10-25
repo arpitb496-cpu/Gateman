@@ -5,6 +5,9 @@ import pytest
 # Set a valid GATEMAN_ADMIN_TOKEN (>= 16 characters) for test suite execution
 os.environ.setdefault("GATEMAN_ADMIN_TOKEN", "gateman_test_admin_token_32chars")
 
+# Test suite sets GATEMAN_ALLOW_NO_MODELS=1 to run fast without heavy neural networks
+os.environ.setdefault("GATEMAN_ALLOW_NO_MODELS", "1")
+
 # Set an isolated fallback test data directory before test modules import backend.main
 _INITIAL_TEST_DATA_DIR = tempfile.mkdtemp(prefix="gateman_test_data_")
 os.environ.setdefault("GATEMAN_DATA_DIR", _INITIAL_TEST_DATA_DIR)

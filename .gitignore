@@ -20,7 +20,11 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Archived logs and temporary files
-detection_log_*.csv
+# Archived logs, database files, and local data
+whitelist.txt
 whitelist_*.tmp
+detection_log.csv
+detection_log_*.csv
+detection_log.txt
 audit_log.csv
+

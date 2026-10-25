@@ -3,6 +3,7 @@ import csv
 import glob
 import tempfile
 import importlib
+from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
@@ -28,12 +29,13 @@ class TestAuthenticationAndSecurity:
     """Test suite covering bearer authentication, endpoints, JSON schemas, archiving, and audit trails."""
 
     def test_health_stays_open_without_token(self):
-        """GET /health must be explicitly exempt from authentication."""
+        """GET /health must be explicitly exempt from authentication and report status and device."""
         client = TestClient(app)
         res = client.get("/health")
         assert res.status_code == 200
         data = res.json()
-        assert data.get("status") == "ok"
+        assert data.get("status") in ("degraded", "ok")
+        assert "device" in data
 
     def test_endpoint_401_with_no_token(self):
         """Accessing protected endpoints without an Authorization header must return 401."""
@@ -171,27 +173,29 @@ class TestAuthenticationAndSecurity:
         """
         Application refuses to start if GATEMAN_ADMIN_TOKEN is unset or shorter than 16 chars.
         """
-        # Case 1: Unset
+        # Case 1: Unset with TestClient
         monkeypatch.delenv("GATEMAN_ADMIN_TOKEN", raising=False)
         with pytest.raises(RuntimeError) as exc_unset:
-            get_admin_token()
-        assert "16 characters" in str(exc_unset.value)
-
-        # Case 2: Shorter than 16 characters
-        monkeypatch.setenv("GATEMAN_ADMIN_TOKEN", "short_token_123")
-        with pytest.raises(RuntimeError) as exc_short:
-            get_admin_token()
-        assert "16 characters" in str(exc_short.value)
-
-        # Case 3: TestClient startup lifecycle failure
-        with pytest.raises(RuntimeError):
             with TestClient(app):
                 pass
+        assert "16 characters" in str(exc_unset.value)
 
-        # Case 4: Module reload failure
+        # Case 2: Shorter than 16 characters with TestClient
+        monkeypatch.setenv("GATEMAN_ADMIN_TOKEN", "short_token_123")
+        with pytest.raises(RuntimeError) as exc_short:
+            with TestClient(app):
+                pass
+        assert "16 characters" in str(exc_short.value)
+
+        # Case 3: Middleware returns 500 when token missing during request
         monkeypatch.delenv("GATEMAN_ADMIN_TOKEN", raising=False)
-        with pytest.raises(RuntimeError):
-            importlib.reload(backend.main)
+        client = TestClient(app, raise_server_exceptions=False)
+        res = client.get("/whitelist", headers={"Authorization": "Bearer any_token_here_123456"})
+        assert res.status_code == 500
+
+        # Case 4: Module import does not fail without token (cli_scanner compatibility)
+        monkeypatch.delenv("GATEMAN_ADMIN_TOKEN", raising=False)
+        importlib.reload(backend.main)
 
         # Restore valid token
         monkeypatch.setenv("GATEMAN_ADMIN_TOKEN", TEST_TOKEN)
@@ -273,4 +277,153 @@ class TestAuthenticationAndSecurity:
         assert res_clear.status_code == 200
         archive_name = res_clear.json()["archive"]
         assert os.path.exists(custom_dir / archive_name)
+
+    def test_init_whitelist_empty_with_warning(self, tmp_path, monkeypatch):
+        """init_whitelist() must not create default plates; create an empty file and log a warning."""
+        custom_dir = tmp_path / "empty_wl_dir"
+        monkeypatch.setenv("GATEMAN_DATA_DIR", str(custom_dir))
+        wl_file = custom_dir / "whitelist.txt"
+        assert not os.path.exists(wl_file)
+
+        backend.main.init_whitelist()
+        assert os.path.exists(wl_file)
+        assert backend.main.get_whitelist() == set()
+        with open(wl_file, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        assert content == ""
+
+    def test_allow_no_models_degraded_and_503(self):
+        """
+        With GATEMAN_ALLOW_NO_MODELS=1, /health returns degraded and /detect returns 503.
+        """
+        import io
+        client = TestClient(app)
+        res_h = client.get("/health")
+        assert res_h.status_code == 200
+        assert res_h.json()["status"] == "degraded"
+        assert "device" in res_h.json()
+
+        # /detect returns 503
+        dummy_img = io.BytesIO(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c $.' \",#\x1c\x1c(7),01444\x1f'9=82<.342\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xbf\x00\xff\xd9")
+        res_d = client.post(
+            "/detect",
+            headers={"Authorization": f"Bearer {TEST_TOKEN}"},
+            files={"file": ("test.jpg", dummy_img, "image/jpeg")},
+        )
+        assert res_d.status_code == 503
+        assert "not loaded" in res_d.json().get("detail", "")
+
+    def test_device_selection_order(self, monkeypatch):
+        """Device selection must prioritize cuda, then mps, then cpu."""
+        import torch
+
+        # Case 1: CUDA available -> cuda
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        assert backend.main.select_device() == "cuda"
+
+        # Case 2: CUDA false, MPS true -> mps
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        if hasattr(torch.backends, "mps"):
+            monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+            assert backend.main.select_device() == "mps"
+
+        # Case 3: CUDA false, MPS false -> cpu
+        if hasattr(torch.backends, "mps"):
+            monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+        assert backend.main.select_device() == "cpu"
+
+    def test_backend_whitelist_deleted_and_env_data_dir(self, tmp_path, monkeypatch):
+        """
+        backend/whitelist.txt must not exist. Whitelist is only read from $GATEMAN_DATA_DIR/whitelist.txt.
+        whitelist.example.txt must exist with fake plates.
+        """
+        project_root = Path(backend.main.PROJECT_ROOT)
+        assert not os.path.exists(project_root / "backend" / "whitelist.txt")
+
+        # Check whitelist.example.txt
+        example_file = project_root / "whitelist.example.txt"
+        assert os.path.exists(example_file)
+        with open(example_file, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+        assert len(lines) > 0
+        assert "DL01AB1234" in lines
+
+        # Check .gitignore contains files
+        gitignore = project_root / ".gitignore"
+        assert os.path.exists(gitignore)
+        with open(gitignore, "r", encoding="utf-8") as f:
+            gi_content = f.read()
+        assert "whitelist.txt" in gi_content
+        assert "detection_log.csv" in gi_content
+        assert "detection_log.txt" in gi_content
+
+    def test_dockerfile_and_dockerignore(self):
+        """
+        Dockerfile must set ENV GATEMAN_DATA_DIR=/data, VOLUME /data,
+        and .dockerignore must ignore data files and model backups.
+        """
+        project_root = Path(backend.main.PROJECT_ROOT)
+        dockerfile = project_root / "backend" / "Dockerfile"
+        if not os.path.exists(dockerfile):
+            dockerfile = project_root / "Dockerfile"
+        assert os.path.exists(dockerfile)
+        with open(dockerfile, "r", encoding="utf-8") as f:
+            df_content = f.read()
+        assert "ENV GATEMAN_DATA_DIR=/data" in df_content
+        assert "VOLUME /data" in df_content
+
+        dockerignore = project_root / ".dockerignore"
+        assert os.path.exists(dockerignore)
+        with open(dockerignore, "r", encoding="utf-8") as f:
+            di_content = f.read()
+        assert "whitelist.txt" in di_content
+        assert "detection_log.csv" in di_content
+        assert "*.pt.bak" in di_content
+
+    def test_cli_scanner_imports_cleanly_without_admin_token(self, monkeypatch):
+        """
+        cli_scanner.py imports backend.main without requiring GATEMAN_ADMIN_TOKEN at import time.
+        """
+        monkeypatch.delenv("GATEMAN_ADMIN_TOKEN", raising=False)
+        import cli_scanner
+        assert hasattr(cli_scanner, "DEVICE")
+
+    def test_frontend_node_check_and_parity(self):
+        """
+        frontend/app.js and app.js must pass node --check, be identical,
+        and include SYSTEM OFFLINE - MANUAL CONTROL handling.
+        """
+        import subprocess
+        project_root = Path(backend.main.PROJECT_ROOT)
+        fe_app = project_root / "frontend" / "app.js"
+        root_app = project_root / "app.js"
+        fe_html = project_root / "frontend" / "index.html"
+        root_html = project_root / "index.html"
+
+        # 1. node --check
+        res1 = subprocess.run(["node", "--check", str(fe_app)], capture_output=True, text=True)
+        assert res1.returncode == 0, f"node --check failed: {res1.stderr}"
+        res2 = subprocess.run(["node", "--check", str(root_app)], capture_output=True, text=True)
+        assert res2.returncode == 0, f"node --check failed: {res2.stderr}"
+
+        # 2. File parity
+        with open(fe_app, "r", encoding="utf-8") as f1, open(root_app, "r", encoding="utf-8") as f2:
+            assert f1.read() == f2.read(), "frontend/app.js and app.js must be identical"
+        with open(fe_html, "r", encoding="utf-8") as f1, open(root_html, "r", encoding="utf-8") as f2:
+            assert f1.read() == f2.read(), "frontend/index.html and index.html must be identical"
+
+        # 3. System offline banner in HTML and app.js
+        with open(fe_html, "r", encoding="utf-8") as f:
+            html_text = f.read()
+        assert "system-offline-banner" in html_text
+        assert "SYSTEM OFFLINE - MANUAL CONTROL" in html_text
+
+        with open(fe_app, "r", encoding="utf-8") as f:
+            app_text = f.read()
+        assert "SYSTEM OFFLINE - MANUAL CONTROL" in app_text
+        assert "setSystemOffline" in app_text
+        assert "degraded" in app_text
+        assert "503" in app_text
+
+
 

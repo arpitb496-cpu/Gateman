@@ -1,4 +1,5 @@
 import os
+import sys
 import io
 import csv
 import re
@@ -83,9 +84,6 @@ def get_admin_token() -> str:
     if not token or len(token) < 16:
         raise RuntimeError("GATEMAN_ADMIN_TOKEN environment variable must be set and at least 16 characters long.")
     return token
-
-# Validate token on module load / startup
-get_admin_token()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -217,11 +215,12 @@ def save_whitelist_atomic(plates: Iterable[str]) -> None:
             raise
 
 def init_whitelist():
-    """Initializes the whitelist file with default allowed plates if not present."""
+    """Initializes the whitelist file with an empty list if not present, logging a warning."""
     with _whitelist_lock:
         whitelist_file = get_whitelist_file()
         if not os.path.exists(whitelist_file):
-            save_whitelist_atomic(["22BH6517A", "MP20CC1234", "DL3CAQ0001", "MH12AB1234", "MH20DV2366"])
+            print(f"⚠️ Warning: Whitelist file not found at {whitelist_file}; initializing empty whitelist.")
+            save_whitelist_atomic([])
 
 def get_whitelist():
     """Reads whitelisted plate numbers."""
@@ -284,35 +283,58 @@ def log_plate_to_db(plate_text, status):
         except Exception as e:
             print(f"CSV log error: {e}")
 
-# Hardware Acceleration Setup: Apple Silicon Metal Performance Shaders (MPS)
+# Hardware Acceleration Setup: cuda -> mps -> cpu
 import torch
-DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
-USE_GPU = (DEVICE == "mps")
 
-# Load AI Models
-USE_MOCK = False
+def select_device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+DEVICE = select_device()
+USE_GPU = DEVICE in ("cuda", "mps")
+
+# Load AI Models (Fail Closed)
+ALLOW_NO_MODELS = os.environ.get("GATEMAN_ALLOW_NO_MODELS") == "1"
+MODELS_LOADED = False
+reader = None
+car_model = None
+plate_model = None
+
 try:
     import cv2
     import numpy as np
-    import easyocr
-    from ultralytics import YOLO
+except ImportError:
+    cv2 = None
+    np = None
 
-    device_name = "Apple Silicon Metal (MPS) GPU" if USE_GPU else "Multi-core CPU"
-    print(f"🚀 Initializing AI Models on {device_name}...")
-    reader = easyocr.Reader(['en'], gpu=USE_GPU, verbose=False)
-    car_model = YOLO(CAR_MODEL_PATH)
-    plate_model = YOLO(PLATE_MODEL_PATH)
-    
-    # Warm-up models on GPU for zero-latency live inference
-    warmup_img = np.zeros((320, 320, 3), dtype=np.uint8)
-    car_model.predict(warmup_img, device=DEVICE, verbose=False)
-    plate_model.predict(warmup_img, device=DEVICE, verbose=False)
-    reader.readtext(warmup_img[100:200, 100:200])
+if ALLOW_NO_MODELS:
+    print("⚠️ GATEMAN_ALLOW_NO_MODELS=1: Starting without AI models (degraded mode for tests).")
+else:
+    try:
+        import easyocr
+        from ultralytics import YOLO
 
-    print(f"✅ Active: Vehicle Model [{os.path.basename(CAR_MODEL_PATH)}] & Plate Model [{os.path.basename(PLATE_MODEL_PATH)}] on {DEVICE.upper()} GPU!")
-except Exception as e:
-    print(f"⚠️ Warning: Could not initialize AI models ({e}). Falling back to mock mode.")
-    USE_MOCK = True
+        device_name = "NVIDIA CUDA GPU" if DEVICE == "cuda" else ("Apple Silicon Metal (MPS) GPU" if DEVICE == "mps" else "Multi-core CPU")
+        print(f"🚀 Initializing AI Models on {device_name} (device={DEVICE})...")
+        reader = easyocr.Reader(['en'], gpu=USE_GPU, verbose=False)
+        car_model = YOLO(CAR_MODEL_PATH)
+        plate_model = YOLO(PLATE_MODEL_PATH)
+
+        # Warm-up models on GPU for zero-latency live inference
+        if np is not None:
+            warmup_img = np.zeros((320, 320, 3), dtype=np.uint8)
+            car_model.predict(warmup_img, device=DEVICE, verbose=False)
+            plate_model.predict(warmup_img, device=DEVICE, verbose=False)
+            reader.readtext(warmup_img[100:200, 100:200])
+
+        print(f"✅ Active: Vehicle Model [{os.path.basename(CAR_MODEL_PATH)}] & Plate Model [{os.path.basename(PLATE_MODEL_PATH)}] on {DEVICE.upper()} GPU!")
+        MODELS_LOADED = True
+    except Exception as e:
+        print(f"❌ Fatal: Failed to initialize AI models: {e}", file=sys.stderr)
+        sys.exit(1)
 
 INDIAN_STATES = {
     'AP', 'AR', 'AS', 'BR', 'CG', 'GA', 'GJ', 'HR', 'HP', 'JH', 'KA', 'KL',
@@ -635,6 +657,12 @@ class DetectionResult(BaseModel):
 
 @app.post("/detect", response_model=DetectionResult)
 def detect_objects(file: UploadFile = File(...)):
+    if not MODELS_LOADED or car_model is None or plate_model is None or reader is None:
+        raise HTTPException(
+            status_code=503,
+            detail="AI detection models not loaded (system offline)"
+        )
+
     try:
         contents = file.file.read()
         image = Image.open(io.BytesIO(contents)).convert('RGB')
@@ -643,17 +671,6 @@ def detect_objects(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=f"Invalid image file: {str(e)}")
 
     whitelist = get_whitelist()
-
-    if USE_MOCK:
-        cx, cy = width // 2, height // 2
-        mock_plate = "22BH6517A"
-        status = "ALLOWED" if mock_plate in whitelist else "UNKNOWN"
-        log_plate_to_db(mock_plate, status)
-        return DetectionResult(
-            cars=[{"box": [cx - 120, cy - 60, cx + 120, cy + 140], "confidence": 0.95, "vehicle_type": "Sedan"}],
-            plates=[{"box": [cx - 60, cy + 50, cx + 60, cy + 90], "text": mock_plate, "confidence": 0.92, "vehicle_type": "Sedan"}],
-            status=status
-        )
 
     # Convert RGB PIL to BGR OpenCV
     frame = np.array(image)[:, :, ::-1].copy()
@@ -797,13 +814,13 @@ def detect_objects(file: UploadFile = File(...)):
 @app.get("/health")
 def health_check():
     return {
-        "status": "ok",
-        "mode": "ai" if not USE_MOCK else "mock",
-        "device": f"{DEVICE.upper()} (Apple Metal GPU)" if USE_GPU else "CPU",
-        "platform": "Apple Silicon (macOS)",
+        "status": "ok" if MODELS_LOADED else "degraded",
+        "device": DEVICE,
+        "gpu": USE_GPU,
+        "platform": "Apple Silicon (macOS)" if DEVICE == "mps" else ("NVIDIA CUDA" if DEVICE == "cuda" else "CPU"),
         "models": {
-            "vehicle": os.path.basename(CAR_MODEL_PATH),
-            "plate": os.path.basename(PLATE_MODEL_PATH)
+            "vehicle": os.path.basename(CAR_MODEL_PATH) if MODELS_LOADED else None,
+            "plate": os.path.basename(PLATE_MODEL_PATH) if MODELS_LOADED else None
         }
     }
 
