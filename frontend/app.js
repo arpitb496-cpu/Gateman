@@ -465,9 +465,6 @@ async function addQuickPlate() {
         if (r.ok) {
             input.value = '';
             loadWhitelist();
-            if (!isSystemOffline) {
-                showStatusOverlay('ALLOWED');
-            }
         } else if (r.status !== 401) {
             const err = await r.json().catch(() => ({}));
             alert('Failed to add plate: ' + (err.detail || r.statusText));
@@ -1089,20 +1086,24 @@ async function detect() {
                 draw(data);
                 logPlates(data);
 
-                if (!isSystemOffline && data.status) {
-                    showStatusOverlay(data.status);
-                }
-
                 if (data.plates && data.plates.length > 0 && data.plates[0].text !== '...') {
                     const topPlate = data.plates[0];
+                    if (!isSystemOffline && topPlate.status) {
+                        showStatusOverlay(topPlate.status);
+                    }
                     if (statusText && !isSystemOffline) {
                         statusText.textContent = `Scanned: ${topPlate.text}`;
                     }
                     if (!isSystemOffline) {
-                        handleGateAccess(topPlate.text, data.status);
+                        handleGateAccess(topPlate.text, topPlate.status);
                     }
-                } else if (statusText && !isSystemOffline) {
-                    statusText.textContent = 'Optical Feed Active';
+                } else {
+                    if (!isSystemOffline && data.status) {
+                        showStatusOverlay(data.status);
+                    }
+                    if (statusText && !isSystemOffline) {
+                        statusText.textContent = 'Optical Feed Active';
+                    }
                 }
             } else {
                 if (r.status === 503) {
@@ -1170,8 +1171,8 @@ function draw(d) {
         const [x1, y1, x2, y2] = p.box;
         const w = x2 - x1;
         const h = y2 - y1;
-        const isAllowed = !isSystemOffline && (p.status === 'ALLOWED' || (!p.status && d.status === 'ALLOWED'));
-        const isConfirm = p.status === 'NEEDS_CONFIRM' || (!p.status && d.status === 'NEEDS_CONFIRM');
+        const isAllowed = !isSystemOffline && p.status === 'ALLOWED';
+        const isConfirm = p.status === 'NEEDS_CONFIRM';
         const plateColor = p.text === '...' ? '#38bdf8' : (isAllowed ? '#10b981' : (isConfirm ? '#f59e0b' : '#ef4444'));
 
         // Glowing border
@@ -1228,7 +1229,7 @@ function logPlates(d) {
         // 4-second cooldown per plate so standing vehicles don't spam duplicate rows
         if (now - lastSeen > 4000) {
             lastSeenPlates.set(cleanText, now);
-            let effectiveStatus = p.status || d.status || (cachedWhitelist.has(cleanText) ? 'ALLOWED' : 'UNKNOWN');
+            let effectiveStatus = p.status || 'UNKNOWN';
             if (isSystemOffline && effectiveStatus === 'ALLOWED') {
                 effectiveStatus = 'UNKNOWN';
             }
