@@ -3,6 +3,8 @@
 **Project Name:** AI Gateman — Automated License Plate Recognition (ANPR) & Access Control System  
 **Target Deployment:** Military Cantonment (Army Cantt) Gate & Boom Barrier Access Control  
 **Hardware Profile:** Hybrid Edge (Sentry Cabin Mini-PC / Apple Silicon MPS + Raspberry Pi GPIO Relay)  
+**Live Vercel Deployment:** [https://vercel.com/arpitb496-cpus-projects/gateman](https://vercel.com/arpitb496-cpus-projects/gateman)  
+**GitHub Repository:** [https://github.com/arpitb496-cpu/Gateman](https://github.com/arpitb496-cpu/Gateman)  
 **Stack:** Python 3.9+ (FastAPI, PyTorch, YOLOv8, EasyOCR, OpenCV) + Vanilla Web (HTML5, TailwindCSS, Web Audio API, Web Speech API)  
 **Date:** October 2026  
 **Status:** Alpha Prototype Functional & Stabilized (Real-time GPU inference, <90ms latency, zero false-positive text)
@@ -182,7 +184,10 @@ The senior engineer should review the following items prior to production deploy
 
 ## 7. How to Run & Verify
 
-### Starting Backend API
+### Live Web Dashboard (Vercel Cloud Deployment)
+- **Live Vercel URL:** [https://vercel.com/arpitb496-cpus-projects/gateman](https://vercel.com/arpitb496-cpus-projects/gateman)
+
+### Starting Backend API (Local GPU Inference)
 ```bash
 source venv/bin/activate
 uvicorn backend.main:app --host 0.0.0.0 --port 8000
