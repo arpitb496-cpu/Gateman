@@ -103,6 +103,10 @@
                 <i data-lucide="volume-2" id="sound-icon" class="w-4 h-4 text-emerald-400"></i>
                 <span id="sound-label">Audio: ON</span>
             </button>
+            <button id="auth-lock-btn" onclick="lockDashboard('LOCKED - enter token')" class="p-2.5 px-3.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl transition-all flex items-center gap-1.5 text-xs font-semibold shadow-sm cursor-pointer" title="Lock Dashboard / Token Entry">
+                <i data-lucide="key" class="w-4 h-4 text-amber-400"></i>
+                <span class="hidden sm:inline">Auth</span>
+            </button>
             <button onclick="toggleWhitelistModal()" class="p-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl transition-all flex items-center gap-2 text-xs font-semibold shadow-sm">
                 <i data-lucide="shield-check" class="w-4 h-4 text-emerald-400"></i>
                 <span>Whitelist</span>
@@ -384,6 +388,51 @@
                 <input type="text" id="modal-plate-input" placeholder="Enter Plate (e.g. DL3CAQ0001)" class="flex-grow bg-slate-900 border border-slate-700 text-xs px-3 py-2.5 rounded-xl font-mono uppercase text-white placeholder-slate-500 outline-none focus:border-emerald-500">
                 <button onclick="addModalPlate()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2.5 rounded-xl text-xs font-semibold">Add</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Authentication Token Modal -->
+    <div id="auth-token-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center hidden">
+        <div class="minimal-panel rounded-2xl p-6 w-full max-w-md border border-slate-700 shadow-2xl relative">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400">
+                    <i data-lucide="shield-alert" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <h3 class="text-lg font-bold text-white">Authentication Required</h3>
+                    <p class="text-xs text-slate-400">Enter Admin Bearer Token to access Gateman</p>
+                </div>
+            </div>
+
+            <form id="auth-token-form" onsubmit="event.preventDefault(); submitAuthToken();" class="space-y-4">
+                <div>
+                    <label for="auth-token-input" class="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wider">
+                        Admin Bearer Token
+                    </label>
+                    <input
+                        type="password"
+                        id="auth-token-input"
+                        autocomplete="current-password"
+                        placeholder="Enter token (e.g. gateman_admin_token_...)"
+                        class="w-full bg-slate-900 border border-slate-700 text-sm px-3.5 py-2.5 rounded-xl font-mono text-white placeholder-slate-500 outline-none focus:border-blue-500 transition-colors"
+                    />
+                    <div id="auth-token-error" class="hidden mt-2 text-xs text-rose-400 font-medium flex items-center gap-1.5">
+                        <i data-lucide="alert-circle" class="w-3.5 h-3.5 flex-shrink-0"></i>
+                        <span id="auth-token-error-text">Invalid token</span>
+                    </div>
+                </div>
+
+                <div class="flex justify-end gap-2 pt-2">
+                    <button
+                        type="submit"
+                        id="auth-token-submit-btn"
+                        class="w-full bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold text-xs py-2.5 px-4 rounded-xl shadow-lg shadow-blue-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                        <i data-lucide="key" class="w-4 h-4"></i>
+                        <span id="auth-token-submit-text">Unlock Dashboard</span>
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 

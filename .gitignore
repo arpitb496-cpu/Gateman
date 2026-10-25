@@ -23,3 +23,4 @@ Thumbs.db
 # Archived logs and temporary files
 detection_log_*.csv
 whitelist_*.tmp
+audit_log.csv

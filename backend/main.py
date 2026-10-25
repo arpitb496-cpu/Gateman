@@ -15,6 +15,7 @@ from PIL import Image
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, status
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Side, Border
@@ -45,11 +46,37 @@ def find_file(filename):
         return p_base
     return p_root
 
-WHITELIST_FILE = find_file("whitelist.txt")
-LOG_FILE = find_file("detection_log.csv")
-AUDIT_LOG_FILE = find_file("audit_log.csv")
 CAR_MODEL_PATH = find_file("yolov8s.pt") if os.path.exists(find_file("yolov8s.pt")) else find_file("yolov8n.pt")
 PLATE_MODEL_PATH = find_file("kbest.pt")
+
+def get_data_dir() -> str:
+    """Returns directory configured by GATEMAN_DATA_DIR env var, defaulting to PROJECT_ROOT."""
+    data_dir = os.environ.get("GATEMAN_DATA_DIR")
+    if data_dir and data_dir.strip():
+        path = os.path.abspath(data_dir.strip())
+        os.makedirs(path, exist_ok=True)
+        return path
+    return PROJECT_ROOT
+
+def get_whitelist_file() -> str:
+    return os.path.join(get_data_dir(), "whitelist.txt")
+
+def get_log_file() -> str:
+    return os.path.join(get_data_dir(), "detection_log.csv")
+
+def get_audit_log_file() -> str:
+    return os.path.join(get_data_dir(), "audit_log.csv")
+
+def __getattr__(name: str):
+    if name == "WHITELIST_FILE":
+        return get_whitelist_file()
+    if name == "LOG_FILE":
+        return get_log_file()
+    if name == "AUDIT_LOG_FILE":
+        return get_audit_log_file()
+    if name == "DATA_DIR":
+        return get_data_dir()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 def get_admin_token() -> str:
     token = os.environ.get("GATEMAN_ADMIN_TOKEN", "")
@@ -87,6 +114,46 @@ if cors_origins_env:
 else:
     CORS_ORIGINS = list(DEFAULT_CORS_ORIGINS)
 
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Allow preflight CORS OPTIONS requests through
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
+        # GET /health is explicitly exempt from authentication
+        if request.url.path.rstrip("/") == "/health" and request.method == "GET":
+            return await call_next(request)
+
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"detail": "Invalid or missing authentication token"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        token = auth_header[7:].strip()
+        try:
+            admin_token = get_admin_token()
+        except Exception as e:
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"detail": str(e)},
+            )
+
+        if not hmac.compare_digest(token, admin_token):
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"detail": "Invalid or missing authentication token"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        return await call_next(request)
+
+# Register AuthMiddleware first (innermost layer)
+app.add_middleware(AuthMiddleware)
+
+# Register CORSMiddleware last (outermost layer so all responses, including 401/500, get CORS headers)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -95,42 +162,6 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "*"],
 )
 
-@app.middleware("http")
-async def require_auth_token(request: Request, call_next):
-    # Allow preflight CORS OPTIONS requests through
-    if request.method == "OPTIONS":
-        return await call_next(request)
-
-    # GET /health is explicitly exempt from authentication
-    if request.url.path.rstrip("/") == "/health" and request.method == "GET":
-        return await call_next(request)
-
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return JSONResponse(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"detail": "Invalid or missing authentication token"},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    token = auth_header[7:].strip()
-    try:
-        admin_token = get_admin_token()
-    except Exception as e:
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"detail": str(e)},
-        )
-
-    if not hmac.compare_digest(token, admin_token):
-        return JSONResponse(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"detail": "Invalid or missing authentication token"},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return await call_next(request)
-
 _whitelist_lock = threading.RLock()
 _audit_lock = threading.Lock()
 _csv_lock = threading.Lock()
@@ -138,19 +169,29 @@ _csv_lock = threading.Lock()
 class WhitelistPlateRequest(BaseModel):
     plate: str
 
+def get_trusted_proxy_ips() -> set:
+    raw = os.environ.get("TRUSTED_PROXY_IPS", "")
+    if not raw:
+        return set()
+    return {ip.strip() for ip in raw.split(",") if ip.strip()}
+
 def get_client_ip(request: Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    if request.client and request.client.host:
-        return request.client.host
-    return "127.0.0.1"
+    peer_ip = request.client.host if request.client and request.client.host else "127.0.0.1"
+    trusted_proxies = get_trusted_proxy_ips()
+    if peer_ip in trusted_proxies:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            client_ip = forwarded.split(",")[0].strip()
+            if client_ip:
+                return client_ip
+    return peer_ip
 
 def log_audit(action: str, detail: str, client_ip: str = "127.0.0.1") -> None:
     timestamp = datetime.now().isoformat()
+    audit_file = get_audit_log_file()
     with _audit_lock:
-        needs_header = not os.path.exists(AUDIT_LOG_FILE) or os.path.getsize(AUDIT_LOG_FILE) == 0
-        with open(AUDIT_LOG_FILE, "a", newline="", encoding="utf-8") as f:
+        needs_header = not os.path.exists(audit_file) or os.path.getsize(audit_file) == 0
+        with open(audit_file, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             if needs_header:
                 writer.writerow(["timestamp", "action", "detail", "client_ip"])
@@ -159,13 +200,14 @@ def log_audit(action: str, detail: str, client_ip: str = "127.0.0.1") -> None:
 def save_whitelist_atomic(plates: Iterable[str]) -> None:
     """Atomically writes sorted unique whitelist plates using temp file + os.replace under lock."""
     with _whitelist_lock:
-        dir_name = os.path.dirname(os.path.abspath(WHITELIST_FILE))
+        whitelist_file = get_whitelist_file()
+        dir_name = os.path.dirname(os.path.abspath(whitelist_file))
         fd, temp_path = tempfile.mkstemp(dir=dir_name, prefix="whitelist_", suffix=".tmp", text=True)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 for p in sorted(list(set(plates))):
                     f.write(f"{p}\n")
-            os.replace(temp_path, WHITELIST_FILE)
+            os.replace(temp_path, whitelist_file)
         except Exception:
             if os.path.exists(temp_path):
                 try:
@@ -177,16 +219,18 @@ def save_whitelist_atomic(plates: Iterable[str]) -> None:
 def init_whitelist():
     """Initializes the whitelist file with default allowed plates if not present."""
     with _whitelist_lock:
-        if not os.path.exists(WHITELIST_FILE):
+        whitelist_file = get_whitelist_file()
+        if not os.path.exists(whitelist_file):
             save_whitelist_atomic(["22BH6517A", "MP20CC1234", "DL3CAQ0001", "MH12AB1234", "MH20DV2366"])
 
 def get_whitelist():
     """Reads whitelisted plate numbers."""
     init_whitelist()
+    whitelist_file = get_whitelist_file()
     plates = set()
     with _whitelist_lock:
         try:
-            with open(WHITELIST_FILE, "r", encoding="utf-8") as f:
+            with open(whitelist_file, "r", encoding="utf-8") as f:
                 for line in f:
                     p = re.sub(r'[^A-Z0-9]', '', line.strip().upper())
                     if p:
@@ -196,7 +240,6 @@ def get_whitelist():
     return plates
 
 _last_logged_plates = {}
-_csv_lock = threading.Lock()
 
 def log_plate_to_db(plate_text, status):
     """Logs recognized plate to Supabase or local CSV fallback with cooldown and thread-lock to prevent race conditions."""
@@ -229,12 +272,13 @@ def log_plate_to_db(plate_text, status):
         except Exception as e:
             print(f"Supabase logging error: {e}")
 
+    log_file = get_log_file()
     with _csv_lock:
-        file_exists = os.path.exists(LOG_FILE)
+        file_exists = os.path.exists(log_file)
         try:
-            with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
+            with open(log_file, "a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                if not file_exists or os.path.getsize(LOG_FILE) == 0:
+                if not file_exists or os.path.getsize(log_file) == 0:
                     writer.writerow(["Date", "Time", "Plate Number", "Status"])
                 writer.writerow([date_str, time_str, plate_text, status])
         except Exception as e:
@@ -800,9 +844,10 @@ def remove_from_whitelist(payload: WhitelistPlateRequest, request: Request):
 def get_logs(limit: int = 50):
     """Returns recent detection log entries."""
     rows = []
-    if os.path.exists(LOG_FILE):
+    log_file = get_log_file()
+    if os.path.exists(log_file):
         try:
-            with open(LOG_FILE, "r", encoding="utf-8") as f:
+            with open(log_file, "r", encoding="utf-8") as f:
                 r = csv.reader(f)
                 next(r, None)
                 for line in r:
@@ -823,17 +868,18 @@ def clear_logs(request: Request):
     """Archives detection_log.csv to a timestamped file before resetting it, logging to audit trail."""
     global _last_logged_plates
     client_ip = get_client_ip(request)
+    log_file = get_log_file()
     with _csv_lock:
         archive_filename = ""
         try:
-            if os.path.exists(LOG_FILE):
-                dir_name = os.path.dirname(os.path.abspath(LOG_FILE))
+            if os.path.exists(log_file):
+                dir_name = os.path.dirname(os.path.abspath(log_file))
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                 archive_filename = f"detection_log_{timestamp}.csv"
                 archive_path = os.path.join(dir_name, archive_filename)
-                shutil.copy2(LOG_FILE, archive_path)
+                shutil.copy2(log_file, archive_path)
 
-            with open(LOG_FILE, "w", newline="", encoding="utf-8") as f:
+            with open(log_file, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(["Date", "Time", "Plate Number", "Status"])
             _last_logged_plates.clear()
@@ -855,9 +901,10 @@ def get_stats():
     allowed_count = 0
     unknown_count = 0
 
-    if os.path.exists(LOG_FILE):
+    log_file = get_log_file()
+    if os.path.exists(log_file):
         try:
-            with open(LOG_FILE, "r", encoding="utf-8") as f:
+            with open(log_file, "r", encoding="utf-8") as f:
                 r = csv.reader(f)
                 next(r, None)
                 for line in r:
@@ -947,9 +994,10 @@ def export_excel():
         except Exception as e:
             print(f"Supabase read error: {e}")
 
-    if not rows and os.path.exists(LOG_FILE):
+    log_file = get_log_file()
+    if not rows and os.path.exists(log_file):
         try:
-            with open(LOG_FILE, "r", encoding="utf-8") as f:
+            with open(log_file, "r", encoding="utf-8") as f:
                 reader = csv.reader(f)
                 next(reader, None)
                 for r in reader:

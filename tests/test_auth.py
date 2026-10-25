@@ -14,11 +14,13 @@ import backend.main
 from backend.main import (
     app,
     get_admin_token,
-    WHITELIST_FILE,
-    LOG_FILE,
-    AUDIT_LOG_FILE,
     save_whitelist_atomic,
     get_whitelist,
+    get_whitelist_file,
+    get_log_file,
+    get_audit_log_file,
+    get_client_ip,
+    get_data_dir,
 )
 
 
@@ -113,7 +115,8 @@ class TestAuthenticationAndSecurity:
 
         # Write a dummy entry to detection_log.csv
         unique_marker = "ARCHIVE_MARKER_TEST_1234"
-        with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
+        log_file = get_log_file()
+        with open(log_file, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["2026-10-25", "12:00:00", unique_marker, "ALLOWED"])
 
@@ -126,7 +129,7 @@ class TestAuthenticationAndSecurity:
         assert archive_name, "Expected an archive filename in response"
 
         # Check archive file exists on disk and contains our marker
-        dir_name = os.path.dirname(os.path.abspath(LOG_FILE))
+        dir_name = os.path.dirname(os.path.abspath(log_file))
         archive_path = os.path.join(dir_name, archive_name)
         assert os.path.exists(archive_path), f"Archive file {archive_path} must exist"
 
@@ -151,8 +154,9 @@ class TestAuthenticationAndSecurity:
         client.post("/whitelist/remove", headers=valid_headers, json={"plate": plate})
         client.post("/clear-logs", headers=valid_headers)
 
-        assert os.path.exists(AUDIT_LOG_FILE), "audit_log.csv must exist"
-        with open(AUDIT_LOG_FILE, "r", encoding="utf-8") as f:
+        audit_file = get_audit_log_file()
+        assert os.path.exists(audit_file), "audit_log.csv must exist"
+        with open(audit_file, "r", encoding="utf-8") as f:
             reader = csv.reader(f)
             header = next(reader)
             assert [c.lower() for c in header] == ["timestamp", "action", "detail", "client_ip"]
@@ -200,6 +204,73 @@ class TestAuthenticationAndSecurity:
         assert get_whitelist() == set(plates)
 
         # Ensure no orphan temp files remain in project directory
-        dir_name = os.path.dirname(os.path.abspath(WHITELIST_FILE))
+        whitelist_file = get_whitelist_file()
+        dir_name = os.path.dirname(os.path.abspath(whitelist_file))
         tmp_files = glob.glob(os.path.join(dir_name, "whitelist_*.tmp"))
         assert len(tmp_files) == 0, "No temporary files should be left after atomic replace"
+
+    def test_trusted_proxy_ips_behavior(self, monkeypatch):
+        """
+        get_client_ip() ignores X-Forwarded-For unless immediate peer is listed in TRUSTED_PROXY_IPS;
+        otherwise it uses request.client.host.
+        """
+        client = TestClient(app)
+        valid_headers = {
+            "Authorization": f"Bearer {TEST_TOKEN}",
+            "X-Forwarded-For": "203.0.113.195, 10.0.0.1",
+        }
+
+        # Case 1: TRUSTED_PROXY_IPS is unset -> ignores X-Forwarded-For
+        monkeypatch.delenv("TRUSTED_PROXY_IPS", raising=False)
+        res = client.post("/whitelist/add", headers=valid_headers, json={"plate": "DL11AA0001"})
+        assert res.status_code == 200
+
+        with open(get_audit_log_file(), "r", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        last_row = rows[-1]
+        assert last_row[1] == "whitelist_add"
+        # TestClient default peer host is 'testclient'
+        assert last_row[3] == "testclient", "Untrusted peer must not use X-Forwarded-For"
+
+        # Case 2: Immediate peer is NOT in TRUSTED_PROXY_IPS
+        monkeypatch.setenv("TRUSTED_PROXY_IPS", "10.0.0.1, 192.168.1.1")
+        client.post("/whitelist/add", headers=valid_headers, json={"plate": "DL11AA0002"})
+        with open(get_audit_log_file(), "r", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        assert rows[-1][3] == "testclient", "Peer not in TRUSTED_PROXY_IPS must be ignored"
+
+        # Case 3: Immediate peer IS in TRUSTED_PROXY_IPS
+        monkeypatch.setenv("TRUSTED_PROXY_IPS", "testclient, 127.0.0.1")
+        client.post("/whitelist/add", headers=valid_headers, json={"plate": "DL11AA0003"})
+        with open(get_audit_log_file(), "r", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        assert rows[-1][3] == "203.0.113.195", "Trusted proxy must parse first IP from X-Forwarded-For"
+
+    def test_data_dir_isolation_uses_tmp_path(self, tmp_path, monkeypatch):
+        """
+        Verify that GATEMAN_DATA_DIR directs whitelist, detection logs, audit logs,
+        and archives to the specified directory without touching project root.
+        """
+        custom_dir = tmp_path / "custom_data_dir"
+        monkeypatch.setenv("GATEMAN_DATA_DIR", str(custom_dir))
+
+        assert get_data_dir() == str(custom_dir)
+        assert get_whitelist_file() == str(custom_dir / "whitelist.txt")
+        assert get_log_file() == str(custom_dir / "detection_log.csv")
+        assert get_audit_log_file() == str(custom_dir / "audit_log.csv")
+
+        client = TestClient(app)
+        valid_headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
+
+        # Whitelist add
+        res_wl = client.post("/whitelist/add", headers=valid_headers, json={"plate": "HR26DK8888"})
+        assert res_wl.status_code == 200
+        assert os.path.exists(custom_dir / "whitelist.txt")
+        assert os.path.exists(custom_dir / "audit_log.csv")
+
+        # Clear logs produces archive in custom_dir
+        res_clear = client.post("/clear-logs", headers=valid_headers)
+        assert res_clear.status_code == 200
+        archive_name = res_clear.json()["archive"]
+        assert os.path.exists(custom_dir / archive_name)
+

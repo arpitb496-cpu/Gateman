@@ -73,3 +73,20 @@ class TestCorsConfiguration:
         res = client.get("/health", headers={"Origin": "http://unauthorized-domain.test"})
         assert res.status_code == 200
         assert res.headers.get("access-control-allow-origin") != "http://unauthorized-domain.test"
+
+    def test_cors_origin_with_wrong_token_returns_401_with_cors_header(self):
+        """
+        Origin http://localhost:3000 + a wrong token returns 401 AND has
+        access-control-allow-origin: http://localhost:3000.
+        """
+        client = TestClient(app)
+        res = client.get(
+            "/whitelist",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Authorization": "Bearer wrong_token_for_cors_test_here",
+            },
+        )
+        assert res.status_code == 401
+        assert res.headers.get("access-control-allow-origin") == "http://localhost:3000"
+

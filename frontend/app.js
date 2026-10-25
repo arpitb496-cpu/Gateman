@@ -6,55 +6,176 @@
 // API endpoint: Always points to port 8000 on current hostname (works on localhost, LAN IPs, and remote)
 const API = `${window.location.protocol}//${window.location.hostname || 'localhost'}:8000`;
 
-// ─── Authentication Token Management (sessionStorage) ─────────
+// ─── Authentication Token Management ─────────────────────────
 const AUTH_STORAGE_KEY = 'gateman_admin_token';
+let isVerifyingToken = false;
+let isDashboardLocked = false;
+let resumeScanAfterUnlock = false;
 
-function getAuthToken(forcePrompt = false) {
-    let token = sessionStorage.getItem(AUTH_STORAGE_KEY);
-    if (!token || forcePrompt) {
-        token = prompt('Enter Gateman Admin Authentication Token:');
-        if (token && token.trim().length > 0) {
-            token = token.trim();
-            sessionStorage.setItem(AUTH_STORAGE_KEY, token);
-        } else {
-            sessionStorage.removeItem(AUTH_STORAGE_KEY);
-            token = '';
-        }
-    }
-    return token || '';
+function getAuthToken() {
+    return sessionStorage.getItem(AUTH_STORAGE_KEY) || '';
 }
 
-function handleUnauthorized() {
-    sessionStorage.removeItem(AUTH_STORAGE_KEY);
-    if (typeof hideStatusOverlay === 'function') {
-        hideStatusOverlay();
+function setAuthToken(token) {
+    if (token) {
+        sessionStorage.setItem(AUTH_STORAGE_KEY, token);
+    } else {
+        sessionStorage.removeItem(AUTH_STORAGE_KEY);
     }
-    // Never show ALLOWED status on 401
+}
+
+function lockDashboard(reason = 'LOCKED - enter token') {
+    isDashboardLocked = true;
+    if (autoScanOn) {
+        resumeScanAfterUnlock = true;
+    }
+    setAutoScan(false);
+    if (autoScanTimer) {
+        clearTimeout(autoScanTimer);
+        autoScanTimer = null;
+    }
+    busy = false;
+
     if (statusOverlay) {
         statusOverlay.className = 'status-overlay unknown';
-        statusOverlay.innerHTML = '<span class="flex items-center gap-2"><i data-lucide="shield-alert" class="w-5 h-5"></i> 401 UNAUTHORIZED • TOKEN REQUIRED</span>';
+        statusOverlay.innerHTML = '<span class="flex items-center gap-2"><i data-lucide="lock" class="w-5 h-5"></i> LOCKED - enter token</span>';
         if (window.lucide) lucide.createIcons();
     }
     if (statusText) {
-        statusText.textContent = 'AUTH ERROR (401)';
+        statusText.textContent = 'LOCKED - enter token';
     }
-    setTimeout(() => {
-        getAuthToken(true);
-    }, 150);
+
+    showTokenModal();
+}
+
+function showTokenModal(errorMessage = '') {
+    const modal = document.getElementById('auth-token-modal');
+    const input = document.getElementById('auth-token-input');
+    const errBox = document.getElementById('auth-token-error');
+    const errTxt = document.getElementById('auth-token-error-text');
+
+    if (modal) {
+        modal.classList.remove('hidden');
+    }
+    if (errBox && errTxt) {
+        if (errorMessage) {
+            errTxt.textContent = errorMessage;
+            errBox.classList.remove('hidden');
+        } else {
+            errBox.classList.add('hidden');
+        }
+    }
+    if (input) {
+        input.value = '';
+        setTimeout(() => input.focus(), 80);
+    }
+    if (window.lucide) lucide.createIcons();
+}
+
+function hideTokenModal() {
+    const modal = document.getElementById('auth-token-modal');
+    const errBox = document.getElementById('auth-token-error');
+    if (modal) {
+        modal.classList.add('hidden');
+    }
+    if (errBox) {
+        errBox.classList.add('hidden');
+    }
+}
+
+function handleUnauthorized() {
+    setAuthToken('');
+    lockDashboard('LOCKED - enter token');
+}
+
+async function submitAuthToken() {
+    if (isVerifyingToken) return;
+    const input = document.getElementById('auth-token-input');
+    const submitBtn = document.getElementById('auth-token-submit-btn');
+    const submitTxt = document.getElementById('auth-token-submit-text');
+    const errBox = document.getElementById('auth-token-error');
+    const errTxt = document.getElementById('auth-token-error-text');
+
+    const candidate = input ? input.value.trim() : '';
+    if (!candidate) {
+        if (errBox && errTxt) {
+            errTxt.textContent = 'Token cannot be empty';
+            errBox.classList.remove('hidden');
+            if (window.lucide) lucide.createIcons();
+        }
+        return;
+    }
+
+    isVerifyingToken = true;
+    if (submitBtn) submitBtn.disabled = true;
+    if (submitTxt) submitTxt.textContent = 'Verifying...';
+
+    try {
+        const res = await fetch(`${API}/whitelist`, {
+            headers: { 'Authorization': `Bearer ${candidate}` }
+        });
+
+        if (res.ok) {
+            setAuthToken(candidate);
+            isDashboardLocked = false;
+            hideTokenModal();
+            hideStatusOverlay();
+
+            if (statusText) {
+                statusText.textContent = stream ? 'Optical Feed Active' : 'Ready';
+            }
+
+            loadWhitelist().then(loadHistoricalLogsAndStats);
+
+            if (stream && (resumeScanAfterUnlock || autoScanOn)) {
+                resumeScanAfterUnlock = false;
+                setAutoScan(true);
+            }
+        } else {
+            const errData = await res.json().catch(() => ({}));
+            const msg = errData.detail || (res.status === 401 ? 'Invalid authentication token' : `Server error: HTTP ${res.status}`);
+            if (errBox && errTxt) {
+                errTxt.textContent = msg;
+                errBox.classList.remove('hidden');
+                if (window.lucide) lucide.createIcons();
+            }
+            lockDashboard('LOCKED - enter token');
+        }
+    } catch (err) {
+        if (errBox && errTxt) {
+            errTxt.textContent = 'Connection error: ' + err.message;
+            errBox.classList.remove('hidden');
+            if (window.lucide) lucide.createIcons();
+        }
+    } finally {
+        isVerifyingToken = false;
+        if (submitBtn) submitBtn.disabled = false;
+        if (submitTxt) submitTxt.textContent = 'Unlock Dashboard';
+    }
 }
 
 async function fetchWithAuth(url, options = {}) {
     const token = getAuthToken();
+    if (!token) {
+        handleUnauthorized();
+        return new Response(JSON.stringify({ detail: 'Token required' }), {
+            status: 401,
+            statusText: 'Unauthorized',
+            headers: { 'Content-Type': 'application/json' }
+        });
+    }
     const opts = { ...options };
     opts.headers = new Headers(opts.headers || {});
-    if (token) {
-        opts.headers.set('Authorization', `Bearer ${token}`);
+    opts.headers.set('Authorization', `Bearer ${token}`);
+    try {
+        const res = await fetch(url, opts);
+        if (res.status === 401) {
+            handleUnauthorized();
+        }
+        return res;
+    } catch (e) {
+        throw e;
     }
-    const res = await fetch(url, opts);
-    if (res.status === 401) {
-        handleUnauthorized();
-    }
-    return res;
 }
 
 // ─── DOM References ──────────────────────────────────────────
@@ -350,7 +471,12 @@ async function loadHistoricalLogsAndStats() {
     }
 }
 
-loadWhitelist().then(loadHistoricalLogsAndStats);
+// Initial authorization check
+if (!getAuthToken()) {
+    lockDashboard('LOCKED - enter token');
+} else {
+    loadWhitelist().then(loadHistoricalLogsAndStats);
+}
 
 // ─── Reset Counters and Clear Detection Logs ───────────────────
 async function clearDetectionLogs() {
@@ -452,16 +578,20 @@ async function exportExcel() {
 let autoScanTimer = null;
 
 function triggerNextScan() {
-    if (!autoScanOn || !stream) return;
+    if (!autoScanOn || !stream || isDashboardLocked || !getAuthToken()) return;
     if (autoScanTimer) clearTimeout(autoScanTimer);
     autoScanTimer = setTimeout(() => {
-        if (autoScanOn && !busy && stream) {
+        if (autoScanOn && !busy && stream && !isDashboardLocked && getAuthToken()) {
             detect();
         }
     }, 30); // 30ms ultra-low throttle keeps inference continuous at full GPU speed
 }
 
 function setAutoScan(on) {
+    if (on && (!getAuthToken() || isDashboardLocked)) {
+        lockDashboard('LOCKED - enter token');
+        return;
+    }
     autoScanOn = on;
     autoscanToggle.setAttribute('aria-pressed', on ? 'true' : 'false');
     if (on) {
@@ -819,6 +949,11 @@ function hideStatusOverlay() {
 
 // ─── Frame Capture → API ─────────────────────────────────────
 async function detect() {
+    const token = getAuthToken();
+    if (!token || isDashboardLocked) {
+        lockDashboard('LOCKED - enter token');
+        return;
+    }
     if (busy || !stream || !video.videoWidth) return;
     busy = true;
 
